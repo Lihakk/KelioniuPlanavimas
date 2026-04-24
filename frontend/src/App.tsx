@@ -1,25 +1,29 @@
 import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
-import { POIList } from './Views/POIList';
-import { POICreate } from './Views/POICreate';
-import { POIView } from './Views/POIView';
-import { POIEdit } from './Views/POIEdit';
+import { Home } from './Views/Home';
+import { POIList } from './Views/Admin/POI/POIList';
+import { POICreate } from './Views/Admin/POI/POICreate';
+import { POIView } from './Views/Admin/POI/POIView';
+import { POIEdit } from './Views/Admin/POI/POIEdit';
+import './App.css';
 
 function App() {
   return (
     <Router>
-      <nav style={{ padding: '1rem', borderBottom: '1px solid #ccc' }}>
-        <Link to="/" style={{ marginRight: '15px' }}>📍 POI List</Link>
-        <Link to="/create">➕ Add New</Link>
-      </nav>
+    <nav className="navbar">
+      <Link to="/" className="nav-link logo">📍 Keliones</Link>
+      <div>
+        <Link to="/" className="nav-link">Main</Link>
+        <Link to="/list" className="nav-link">POI</Link>
+      </div>
+    </nav>
 
-      <main style={{ padding: '20px' }}>
-        <Routes>
-          <Route path="/" element={<POIList />} />
-          <Route path="/create" element={<POICreate />} />
-          <Route path="/view/:id" element={<POIView />} />
-          <Route path="/edit/:id" element={<POIEdit />} />
-        </Routes>
-      </main>
+      <Routes>
+        <Route path="/" element={<Home />} />
+        <Route path="/list" element={<POIList />} />
+        <Route path="/create" element={<POICreate />} />
+        <Route path="/view/:id" element={<POIView />} />
+        <Route path="/edit/:id" element={<POIEdit />} />
+      </Routes>
     </Router>
   );
 }
