@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import api from '../../api/api';
-import type { Review, TripRecommendation } from '../../types';
+import type { RecommendationPreferences, Review, TripRecommendation } from '../../types';
 
 export const ReviewsPage = () => {
     const [reviews, setReviews] = useState<Review[]>([]);
@@ -9,22 +9,44 @@ export const ReviewsPage = () => {
     const [tripElementId, setTripElementId] = useState(1);
     const [reviewText, setReviewText] = useState('');
     const [rating, setRating] = useState(5);
+    const [preferences, setPreferences] = useState<RecommendationPreferences>({
+        travelType: 'City',
+        budget: 500,
+        weatherPreference: 'clear'
+    });
+    const [message, setMessage] = useState('');
 
     const requestTripElementReviews = () => api.get<Review[]>('/Review').then(res => setReviews(res.data));
     const requestRecommendations = () => api.get<TripRecommendation[]>('/Review/recommendations').then(res => setRecommendations(res.data));
+    const personalizeRecommendations = async () => {
+        try {
+            const response = await api.post<TripRecommendation[]>('/Review/recommendations', preferences);
+            setRecommendations(response.data);
+            setMessage('Personalized recommendations updated.');
+        } catch (error) {
+            console.error(error);
+            setMessage('Could not personalize recommendations.');
+        }
+    };
 
     const saveReviewData = async (e: React.FormEvent) => {
         e.preventDefault();
-        await api.post('/Review', {
-            tripElementType,
-            tripElementId,
-            reviewText,
-            rating,
-            date: new Date().toISOString()
-        });
-        setReviewText('');
-        await requestTripElementReviews();
-        await requestRecommendations();
+        try {
+            await api.post('/Review', {
+                tripElementType,
+                tripElementId,
+                reviewText,
+                rating,
+                date: new Date().toISOString()
+            });
+            setReviewText('');
+            setMessage('Review saved.');
+            await requestTripElementReviews();
+            await requestRecommendations();
+        } catch (error) {
+            console.error(error);
+            setMessage('Review can be saved only when the trip rules allow it.');
+        }
     };
 
     useEffect(() => {
@@ -33,17 +55,46 @@ export const ReviewsPage = () => {
     }, []);
 
     return (
-        <div className="container page-grid">
-            <section>
-                <h2>Reviews and recommendations</h2>
+        <div className="workspace">
+            <header className="page-head">
+                <span className="eyebrow">Review diagrams P8-P9 and K1-K2</span>
+                <h1>Reviews and recommendations</h1>
+            </header>
+
+            <div className="flow-grid">
+                <section className="panel">
+                    <div className="section-title">
+                        <h2>Recommendations</h2>
+                        <button className="btn btn-outline" onClick={requestRecommendations}>Refresh</button>
+                    </div>
+                    <div className="data-list dense">
+                        {recommendations.map(item => (
+                            <article className="data-card" key={item.tripId}>
+                                <strong>{item.name}</strong>
+                                <span>Score: {item.score}</span>
+                                <span>{item.reason}</span>
+                            </article>
+                        ))}
+                    </div>
+                </section>
+
+                <section className="panel">
+                    <h2>Personalization</h2>
+                    <label>Travel type</label>
+                    <input value={preferences.travelType} onChange={e => setPreferences({ ...preferences, travelType: e.target.value })} />
+                    <label>Budget</label>
+                    <input type="number" value={preferences.budget} onChange={e => setPreferences({ ...preferences, budget: Number(e.target.value) })} />
+                    <label>Weather preference</label>
+                    <input value={preferences.weatherPreference} onChange={e => setPreferences({ ...preferences, weatherPreference: e.target.value })} />
+                    <button className="btn btn-primary" onClick={personalizeRecommendations}>Personalize</button>
+                    {message && <p className="status-line">{message}</p>}
+                </section>
+            </div>
+
+            <div className="flow-grid">
+                <section className="panel">
+                    <h2>Trip element reviews</h2>
                 <div className="data-list">
-                    {recommendations.map(item => (
-                        <article className="data-card" key={item.tripId}>
-                            <strong>{item.name}</strong>
-                            <span>Score: {item.score}</span>
-                            <span>{item.reason}</span>
-                        </article>
-                    ))}
                     {reviews.map(review => (
                         <article className="data-card" key={review.id}>
                             <strong>{review.tripElementType} #{review.tripElementId}</strong>
@@ -68,6 +119,7 @@ export const ReviewsPage = () => {
                     <button className="btn btn-primary" type="submit">Save review</button>
                 </form>
             </section>
+            </div>
         </div>
     );
 };

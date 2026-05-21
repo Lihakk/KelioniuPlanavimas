@@ -21,6 +21,7 @@ public class RouteController : ControllerBase
         _httpClient = httpClientFactory.CreateClient();
         _configuration = configuration;
         _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("KelionesRoutePlanner/1.0");
+        _httpClient.Timeout = TimeSpan.FromSeconds(2);
     }
 
     [HttpGet]
@@ -198,6 +199,37 @@ public class RouteController : ControllerBase
         return poi;
     }
 
+    [HttpPost("roadPOI")]
+    public async Task<ActionResult<IEnumerable<PointOfInterest>>> getRoadPOI([FromBody] RoadPoiRequest request, CancellationToken cancellationToken)
+    {
+        var route = new TripRoute
+        {
+            Name = $"{request.StartingCity} to {request.EndCity}",
+            StartingCity = request.StartingCity,
+            EndCity = request.EndCity
+        };
+
+        try
+        {
+            var cities = await checkCities(route, cancellationToken);
+            var osmData = await getOSMData(cities, cancellationToken);
+            var roadData = cleanRoadData(osmData)
+                .Concat(createCorridorPOI(cities))
+                .GroupBy(poi => $"{poi.Name}|{poi.Latitude}|{poi.Longitude}", StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.First())
+                .OrderByDescending(poi => poi.Rating)
+                .ThenBy(poi => poi.Name)
+                .Take(80)
+                .ToList();
+
+            return roadData;
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ex.Message);
+        }
+    }
+
     private async Task<RoutePlanningResult> sendCities(TripRoute route, CancellationToken cancellationToken = default)
     {
         var checkedCities = await checkCities(route, cancellationToken);
@@ -303,6 +335,10 @@ public class RouteController : ControllerBase
         {
             return getFallbackPOI(cities);
         }
+        catch (TaskCanceledException)
+        {
+            return getFallbackPOI(cities);
+        }
     }
 
     private List<PointOfInterest> cleanRoadData(List<PointOfInterest> pois)
@@ -381,6 +417,10 @@ public class RouteController : ControllerBase
             return new RouteMatrix(points, durations, distances);
         }
         catch (HttpRequestException)
+        {
+            return createFallbackLengthMatrix(points);
+        }
+        catch (TaskCanceledException)
         {
             return createFallbackLengthMatrix(points);
         }
@@ -506,6 +546,10 @@ public class RouteController : ControllerBase
         {
             return createFallbackPolyLine(selectedRoad);
         }
+        catch (TaskCanceledException)
+        {
+            return createFallbackPolyLine(selectedRoad);
+        }
     }
 
     private RouteRoad checkPolyLine(JsonElement root, List<RoutePlanningPoint> selectedRoad)
@@ -572,6 +616,10 @@ public class RouteController : ControllerBase
                 readCoordinate(first.GetProperty("lon").GetString()));
         }
         catch (HttpRequestException)
+        {
+            return getKnownCity(city);
+        }
+        catch (TaskCanceledException)
         {
             return getKnownCity(city);
         }
@@ -701,9 +749,50 @@ public class RouteController : ControllerBase
     {
         return getKnownPOI(cities.Start.Name)
             .Concat(getKnownPOI(cities.End.Name))
+            .Concat(createCorridorPOI(cities))
             .GroupBy(poi => poi.Name, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.First())
             .ToList();
+    }
+
+    private static List<PointOfInterest> createCorridorPOI(CheckedCities cities)
+    {
+        var names = new[]
+        {
+            "Old road viewpoint",
+            "Forest rest stop",
+            "Regional history marker",
+            "River bend lookout",
+            "Local food stop",
+            "Manor park",
+            "Nature trail entrance",
+            "Small town square",
+            "Hill panorama",
+            "Roadside chapel",
+            "Lake picnic place",
+            "Craft museum stop",
+            "Scenic bridge",
+            "Market street stop",
+            "Castle road viewpoint",
+            "Pine forest path",
+            "Cultural center",
+            "Historic mill place",
+            "Countryside cafe",
+            "Final approach lookout"
+        };
+        var types = new[] { "viewpoint", "park", "museum", "historic", "cafe" };
+        var result = new List<PointOfInterest>();
+
+        for (var i = 0; i < names.Length; i++)
+        {
+            var t = (i + 1d) / (names.Length + 1d);
+            var sideOffset = i % 2 == 0 ? 0.012d : -0.012d;
+            var latitude = cities.Start.Latitude + (cities.End.Latitude - cities.Start.Latitude) * t + sideOffset;
+            var longitude = cities.Start.Longitude + (cities.End.Longitude - cities.Start.Longitude) * t - sideOffset;
+            result.Add(createKnownPOI(names[i], types[i % types.Length], "Between cities", latitude, longitude));
+        }
+
+        return result;
     }
 
     private static List<PointOfInterest> getKnownPOI(string city)
@@ -824,3 +913,9 @@ public record RouteMatrix(List<RoutePlanningPoint> Points, List<List<double>> Du
 public record RouteRoad(List<RoutePlanningPoint> Points, double DistanceMeters, double DurationSeconds, string GeoJson);
 
 public record RoutePlanningResult(TripRoute Route, List<PointOfInterest> ImportedPOI, RouteRoad Road);
+
+public class RoadPoiRequest
+{
+    public string StartingCity { get; set; } = string.Empty;
+    public string EndCity { get; set; } = string.Empty;
+}

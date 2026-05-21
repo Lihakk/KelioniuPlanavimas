@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import api from '../../api/api';
 import type { PointOfInterest, RoutePoint, TravelRoute } from '../../types';
+import { RouteMap } from './RouteMap';
 
 export const RoutesPage = () => {
     const [routes, setRoutes] = useState<TravelRoute[]>([]);
@@ -9,6 +10,7 @@ export const RoutesPage = () => {
     const [objects, setObjects] = useState<PointOfInterest[]>([]);
     const [selectedNames, setSelectedNames] = useState<string[]>([]);
     const [createdRoute, setCreatedRoute] = useState<TravelRoute | null>(null);
+    const [editingRouteId, setEditingRouteId] = useState<number | null>(null);
     const [isSearching, setIsSearching] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [message, setMessage] = useState('');
@@ -31,10 +33,10 @@ export const RoutesPage = () => {
         setCreatedRoute(null);
 
         try {
-            const response = await api.post<PointOfInterest[]>('/POI/sendRouteData', { city: endCity, type: '' });
+            const response = await api.post<PointOfInterest[]>('/Route/roadPOI', { startingCity: startCity, endCity });
             setObjects(response.data);
-            setSelectedNames([]);
-            setMessage(response.data.length ? 'Objects loaded from OSM.' : 'No objects found for this city.');
+            setSelectedNames(current => current.filter(name => response.data.some(object => object.name === name)));
+            setMessage(response.data.length ? `${response.data.length} road POIs loaded.` : 'No objects found between these cities.');
         } catch (error) {
             console.error(error);
             setMessage('Could not load objects from map data.');
@@ -65,7 +67,8 @@ export const RoutesPage = () => {
                 order: index + 1
             }));
 
-            const response = await api.post<TravelRoute>('/Route', {
+            const payload = {
+                id: editingRouteId ?? undefined,
                 name: `${startCity} to ${endCity}`,
                 length: 0,
                 startingCity: startCity,
@@ -73,10 +76,15 @@ export const RoutesPage = () => {
                 polyline: '',
                 travelTime: '',
                 routePoints
-            });
+            };
+
+            const response = editingRouteId
+                ? await api.put(`/Route/${editingRouteId}`, payload).then(async () => api.get<TravelRoute>(`/Route/${editingRouteId}`))
+                : await api.post<TravelRoute>('/Route', payload);
 
             setCreatedRoute(response.data);
-            setMessage('Route calculated and saved automatically.');
+            setEditingRouteId(response.data.id ?? null);
+            setMessage('Route recalculated through selected points.');
             await getRoutes();
         } catch (error) {
             console.error(error);
@@ -89,23 +97,62 @@ export const RoutesPage = () => {
     const deleteRoute = async (id?: number) => {
         if (!id) return;
         await api.delete(`/Route/${id}`);
+        if (editingRouteId === id) {
+            setEditingRouteId(null);
+            setCreatedRoute(null);
+        }
         await getRoutes();
     };
+
+    const editRoute = async (route: TravelRoute) => {
+        setEditingRouteId(route.id ?? null);
+        setCreatedRoute(route);
+        setStartCity(route.startingCity);
+        setEndCity(route.endCity);
+        setSelectedNames(route.routePoints?.map(point => point.name) ?? []);
+        setMessage('Route loaded for editing. Select more road POIs and recalculate.');
+        const response = await api.post<PointOfInterest[]>('/Route/roadPOI', { startingCity: route.startingCity, endCity: route.endCity });
+        const routePointObjects = route.routePoints?.map(point => ({
+            name: point.name,
+            type: 'selected',
+            address: point.city,
+            hasTicket: false,
+            workingHours: '',
+            rating: 4,
+            latitude: point.latitude,
+            longitude: point.longitude
+        })) ?? [];
+        setObjects([...routePointObjects, ...response.data].filter((object, index, array) =>
+            array.findIndex(item => item.name === object.name) === index
+        ));
+    };
+
+    const newRoute = () => {
+        setEditingRouteId(null);
+        setCreatedRoute(null);
+        setSelectedNames([]);
+        setMessage('New route mode.');
+    };
+
+    useEffect(() => {
+        getRoutes();
+        findObjects();
+    }, []);
 
     return (
         <div className="trip-workspace">
             <section className="trip-builder">
                 <div className="builder-head">
                     <div>
-                        <span className="eyebrow">Automatic route creation</span>
-                        <h1>Calculate a route from selected visit objects</h1>
+                        <span className="eyebrow">Route editor</span>
+                        <h1>Select POIs between cities and recalculate the route</h1>
                     </div>
                     <button className="btn btn-outline" onClick={findObjects} disabled={isSearching || !endCity}>
-                        {isSearching ? 'Loading objects...' : 'Find objects'}
+                        {isSearching ? 'Loading road POIs...' : 'Find road POIs'}
                     </button>
                 </div>
 
-                <form onSubmit={saveRoute} className="builder-grid">
+                <form onSubmit={saveRoute} className="planner-layout route-page-layout">
                     <div className="builder-panel">
                         <label>Starting city</label>
                         <input value={startCity} onChange={e => setStartCity(e.target.value)} required />
@@ -113,40 +160,32 @@ export const RoutesPage = () => {
                         <label>Finishing city</label>
                         <input value={endCity} onChange={e => setEndCity(e.target.value)} required />
 
+                        <div className="route-editor-actions">
+                            <button className="btn btn-outline" type="button" onClick={newRoute}>New route</button>
+                            <button className="btn btn-outline" type="button" onClick={findObjects}>Reload POIs</button>
+                        </div>
+
                         <button className="btn btn-primary" type="submit" disabled={isSaving}>
-                            {isSaving ? 'Calculating route...' : 'Save calculated route'}
+                            {isSaving ? 'Recalculating route...' : editingRouteId ? 'Recalculate edited route' : 'Save calculated route'}
                         </button>
 
                         {message && <p className="status-line">{message}</p>}
                     </div>
 
-                    <div className="map-preview" aria-label="Route preview">
-                        <div className="map-city start">{startCity || 'Start'}</div>
-                        <div className="route-line">
-                            {selectedObjects.map(object => (
-                                <button
-                                    type="button"
-                                    key={object.name}
-                                    className="route-stop"
-                                    title={object.name}
-                                    onClick={() => toggleObject(object.name)}
-                                >
-                                    {object.name.slice(0, 2).toUpperCase()}
-                                </button>
-                            ))}
-                        </div>
-                        <div className="map-city end">{endCity || 'Finish'}</div>
-                        <div className="route-summary">
-                            <strong>{createdRoute ? `${createdRoute.length} km` : `${selectedObjects.length} selected objects`}</strong>
-                            <span>{createdRoute?.travelTime || 'Route time appears after calculation'}</span>
-                        </div>
-                    </div>
+                    <RouteMap
+                        startCity={startCity}
+                        endCity={endCity}
+                        objects={objects}
+                        selectedNames={selectedNames}
+                        createdRoute={createdRoute}
+                        onToggleObject={toggleObject}
+                    />
                 </form>
 
                 <div className="object-layout">
                     <section>
                         <div className="section-title">
-                            <h2>Objects from map data</h2>
+                            <h2>Road points of interest</h2>
                             <span>{selectedObjects.length} selected</span>
                         </div>
                         <div className="object-grid">
@@ -165,6 +204,7 @@ export const RoutesPage = () => {
                                     </button>
                                 );
                             })}
+                            {objects.length === 0 && <div className="empty-state">Load road POIs to show selectable map points between the cities.</div>}
                         </div>
                     </section>
 
@@ -180,10 +220,15 @@ export const RoutesPage = () => {
                                         <strong>{route.name}</strong>
                                         <span>{route.startingCity} to {route.endCity}</span>
                                         <span>{route.travelTime || 'Time not estimated'} | {route.length} km</span>
+                                        <span>{route.routePoints?.length ?? 0} selected POIs</span>
                                     </div>
-                                    <button className="btn btn-danger" onClick={() => deleteRoute(route.id)}>Delete</button>
+                                    <div className="inline-actions">
+                                        <button className="btn btn-outline" onClick={() => editRoute(route)}>Edit</button>
+                                        <button className="btn btn-danger" onClick={() => deleteRoute(route.id)}>Delete</button>
+                                    </div>
                                 </article>
                             ))}
+                            {routes.length === 0 && <div className="empty-state">No saved routes yet. Select road POIs and save a calculated route.</div>}
                         </div>
                     </section>
                 </div>

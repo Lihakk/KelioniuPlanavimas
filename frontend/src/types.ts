@@ -113,3 +113,20 @@ export interface TravelOffer {
     latitude: string;
     longitude: string;
 }
+
+export type AccountStatus = 'Active' | 'Blocked';
+
+export interface UserAccount {
+    id?: number;
+    firstName: string;
+    lastName: string;
+    email: string;
+    isAdmin: boolean;
+    accountStatus: AccountStatus;
+}
+
+export interface RecommendationPreferences {
+    travelType: string;
+    budget: number;
+    weatherPreference: string;
+}

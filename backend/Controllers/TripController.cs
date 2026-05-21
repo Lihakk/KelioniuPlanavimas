@@ -20,6 +20,7 @@ public class TripController : ControllerBase
         _httpClient = httpClientFactory.CreateClient();
         _configuration = configuration;
         _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("KelionesTravelOffers/1.0");
+        _httpClient.Timeout = TimeSpan.FromSeconds(2);
     }
 
     [HttpGet]
@@ -201,8 +202,7 @@ public class TripController : ControllerBase
             return bookingOffers;
         }
 
-        var city = await geocodeCity(request.DestinationCity, cancellationToken);
-        return await requestOsmAccommodationList(city, cancellationToken);
+        return createFallbackOffers("Booking/local", request.DestinationCity, "Hotel", 85m);
     }
 
     private async Task<List<TravelOffer>> requestFlightListFromExternalActor(TravelOfferRequest request, CancellationToken cancellationToken)
@@ -215,7 +215,7 @@ public class TripController : ControllerBase
 
         var from = await geocodeCity(request.StartCity, cancellationToken);
         var to = await geocodeCity(request.DestinationCity, cancellationToken);
-        return await requestOsmFlightList(from, to, request, cancellationToken);
+        return createFallbackFlightOffers(from, to, request);
     }
 
     private async Task<List<TravelOffer>> requestCarListFromExternalActor(TravelOfferRequest request, CancellationToken cancellationToken)
@@ -226,8 +226,7 @@ public class TripController : ControllerBase
             return discoverCarsOffers;
         }
 
-        var city = await geocodeCity(request.DestinationCity, cancellationToken);
-        return await requestOsmCarList(city, cancellationToken);
+        return createFallbackOffers("Discovercars/local", request.DestinationCity, "Car rental", 35m);
     }
 
     private Reservation selectAccommodation(Trip trip, TravelOffer offer)
@@ -271,29 +270,36 @@ public class TripController : ControllerBase
             return new List<TravelOffer>();
         }
 
-        var url = $"{providerUrl.TrimEnd('/')}?from={Uri.EscapeDataString(request.StartCity)}&to={Uri.EscapeDataString(request.DestinationCity)}&startDate={request.StartDate:yyyy-MM-dd}&endDate={request.EndDate:yyyy-MM-dd}";
-        using var response = await _httpClient.GetAsync(url, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        try
+        {
+            var url = $"{providerUrl.TrimEnd('/')}?from={Uri.EscapeDataString(request.StartCity)}&to={Uri.EscapeDataString(request.DestinationCity)}&startDate={request.StartDate:yyyy-MM-dd}&endDate={request.EndDate:yyyy-MM-dd}";
+            using var response = await _httpClient.GetAsync(url, cancellationToken);
+            response.EnsureSuccessStatusCode();
 
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var json = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            using var json = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
 
-        if (!json.RootElement.TryGetProperty("offers", out var offers))
+            if (!json.RootElement.TryGetProperty("offers", out var offers))
+            {
+                return new List<TravelOffer>();
+            }
+
+            return offers.EnumerateArray()
+                .Select(item => new TravelOffer
+                {
+                    Provider = providerName,
+                    Name = readString(item, "name", providerName),
+                    Description = readString(item, "description", string.Empty),
+                    Price = readDecimal(item, "price", 0),
+                    Latitude = readString(item, "latitude", string.Empty),
+                    Longitude = readString(item, "longitude", string.Empty)
+                })
+                .ToList();
+        }
+        catch
         {
             return new List<TravelOffer>();
         }
-
-        return offers.EnumerateArray()
-            .Select(item => new TravelOffer
-            {
-                Provider = providerName,
-                Name = readString(item, "name", providerName),
-                Description = readString(item, "description", string.Empty),
-                Price = readDecimal(item, "price", 0),
-                Latitude = readString(item, "latitude", string.Empty),
-                Longitude = readString(item, "longitude", string.Empty)
-            })
-            .ToList();
     }
 
     private async Task<List<TravelOffer>> requestOsmAccommodationList(GeoPoint city, CancellationToken cancellationToken)
@@ -338,52 +344,71 @@ public class TripController : ControllerBase
 
     private async Task<List<JsonElement>> requestOverpass(GeoPoint city, string selector, CancellationToken cancellationToken)
     {
-        var overpassUrl = _configuration["ExternalApis:OverpassUrl"] ?? "https://overpass-api.de/api/interpreter";
-        var radius = _configuration.GetValue("ExternalApis:OfferSearchRadiusMeters", 25_000);
-        var query = "data=" + Uri.EscapeDataString($"""
-            [out:json][timeout:25];
-            (
-              {selector}(around:{radius},{city.Latitude.ToString(CultureInfo.InvariantCulture)},{city.Longitude.ToString(CultureInfo.InvariantCulture)});
-            );
-            out center tags 40;
-            """);
+        try
+        {
+            var overpassUrl = _configuration["ExternalApis:OverpassUrl"] ?? "https://overpass-api.de/api/interpreter";
+            var radius = _configuration.GetValue("ExternalApis:OfferSearchRadiusMeters", 25_000);
+            var query = "data=" + Uri.EscapeDataString($"""
+                [out:json][timeout:25];
+                (
+                  {selector}(around:{radius},{city.Latitude.ToString(CultureInfo.InvariantCulture)},{city.Longitude.ToString(CultureInfo.InvariantCulture)});
+                );
+                out center tags 40;
+                """);
 
-        using var content = new StringContent(query, Encoding.UTF8, "application/x-www-form-urlencoded");
-        using var response = await _httpClient.PostAsync(overpassUrl, content, cancellationToken);
-        response.EnsureSuccessStatusCode();
+            using var content = new StringContent(query, Encoding.UTF8, "application/x-www-form-urlencoded");
+            using var response = await _httpClient.PostAsync(overpassUrl, content, cancellationToken);
+            response.EnsureSuccessStatusCode();
 
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var json = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            using var json = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
 
-        if (!json.RootElement.TryGetProperty("elements", out var elements))
+            if (!json.RootElement.TryGetProperty("elements", out var elements))
+            {
+                return new List<JsonElement>();
+            }
+
+            return elements.EnumerateArray().Select(element => element.Clone()).ToList();
+        }
+        catch
         {
             return new List<JsonElement>();
         }
-
-        return elements.EnumerateArray().Select(element => element.Clone()).ToList();
     }
 
     private async Task<GeoPoint> geocodeCity(string city, CancellationToken cancellationToken)
     {
-        var nominatimUrl = _configuration["ExternalApis:NominatimUrl"] ?? "https://nominatim.openstreetmap.org";
-        var url = $"{nominatimUrl.TrimEnd('/')}/search?format=jsonv2&limit=1&q={Uri.EscapeDataString(city)}";
-
-        using var response = await _httpClient.GetAsync(url, cancellationToken);
-        response.EnsureSuccessStatusCode();
-
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var json = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
-
-        if (json.RootElement.GetArrayLength() == 0)
+        if (isKnownCity(city))
         {
-            throw new InvalidOperationException($"City not found: {city}");
+            return createFallbackGeoPoint(city);
         }
 
-        var first = json.RootElement[0];
-        return new GeoPoint(
-            first.GetProperty("display_name").GetString() ?? city,
-            readDouble(first.GetProperty("lat").GetString()),
-            readDouble(first.GetProperty("lon").GetString()));
+        try
+        {
+            var nominatimUrl = _configuration["ExternalApis:NominatimUrl"] ?? "https://nominatim.openstreetmap.org";
+            var url = $"{nominatimUrl.TrimEnd('/')}/search?format=jsonv2&limit=1&q={Uri.EscapeDataString(city)}";
+
+            using var response = await _httpClient.GetAsync(url, cancellationToken);
+            response.EnsureSuccessStatusCode();
+
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            using var json = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+
+            if (json.RootElement.GetArrayLength() == 0)
+            {
+                return createFallbackGeoPoint(city);
+            }
+
+            var first = json.RootElement[0];
+            return new GeoPoint(
+                first.GetProperty("display_name").GetString() ?? city,
+                readDouble(first.GetProperty("lat").GetString()),
+                readDouble(first.GetProperty("lon").GetString()));
+        }
+        catch
+        {
+            return createFallbackGeoPoint(city);
+        }
     }
 
     private static Reservation createReservation(Trip trip, TravelOffer offer, ReservationType type)
@@ -457,6 +482,67 @@ public class TripController : ControllerBase
     private static double readDouble(string? value)
     {
         return double.Parse(value ?? "0", CultureInfo.InvariantCulture);
+    }
+
+    private static GeoPoint createFallbackGeoPoint(string city)
+    {
+        return city.Trim().ToLowerInvariant() switch
+        {
+            "kaunas" => new GeoPoint("Kaunas", 54.8985, 23.9036),
+            "vilnius" => new GeoPoint("Vilnius", 54.6872, 25.2797),
+            "klaipeda" or "klaipėda" => new GeoPoint("Klaipeda", 55.7033, 21.1443),
+            "trakai" => new GeoPoint("Trakai", 54.6378, 24.9343),
+            _ => new GeoPoint(city, 54.6872, 25.2797)
+        };
+    }
+
+    private static bool isKnownCity(string city)
+    {
+        var value = city.Trim().ToLowerInvariant();
+        return value is "kaunas" or "vilnius" or "klaipeda" or "klaipėda" or "trakai";
+    }
+
+    private static List<TravelOffer> createFallbackOffers(string provider, string city, string category, decimal basePrice)
+    {
+        var place = createFallbackGeoPoint(city);
+        return new List<TravelOffer>
+        {
+            new()
+            {
+                Provider = provider,
+                Name = $"{city} {category} option",
+                Description = $"Local fallback {category.ToLowerInvariant()} offer for {city}",
+                Price = basePrice,
+                Latitude = place.Latitude.ToString(CultureInfo.InvariantCulture),
+                Longitude = place.Longitude.ToString(CultureInfo.InvariantCulture)
+            },
+            new()
+            {
+                Provider = provider,
+                Name = $"{city} central {category.ToLowerInvariant()}",
+                Description = $"Central {category.ToLowerInvariant()} option when external service is unavailable",
+                Price = basePrice + 20,
+                Latitude = (place.Latitude + 0.01).ToString(CultureInfo.InvariantCulture),
+                Longitude = (place.Longitude + 0.01).ToString(CultureInfo.InvariantCulture)
+            }
+        };
+    }
+
+    private static List<TravelOffer> createFallbackFlightOffers(GeoPoint from, GeoPoint to, TravelOfferRequest request)
+    {
+        var days = Math.Max(1, (request.EndDate.Date - request.StartDate.Date).Days);
+        return new List<TravelOffer>
+        {
+            new()
+            {
+                Provider = "Skyscanner/local",
+                Name = $"{from.Name} -> {to.Name}",
+                Description = $"Local fallback flight for {request.StartDate:yyyy-MM-dd}",
+                Price = 80 + days * 25,
+                Latitude = to.Latitude.ToString(CultureInfo.InvariantCulture),
+                Longitude = to.Longitude.ToString(CultureInfo.InvariantCulture)
+            }
+        };
     }
 }
 

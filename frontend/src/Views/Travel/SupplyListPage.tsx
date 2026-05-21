@@ -6,28 +6,45 @@ export const SupplyListPage = () => {
     const [trips, setTrips] = useState<Trip[]>([]);
     const [tripId, setTripId] = useState('');
     const [supplyList, setSupplyList] = useState<SupplyList | null>(null);
+    const [message, setMessage] = useState('');
 
     const requestTripData = () => api.get<Trip[]>('/Trip').then(res => setTrips(res.data));
 
     const createSupplyList = async () => {
         if (!tripId) return;
-        const res = await api.post<SupplyList>(`/SupplyList/trip/${tripId}`);
-        setSupplyList(res.data);
+        try {
+            const res = await api.post<SupplyList>(`/SupplyList/trip/${tripId}`);
+            setSupplyList(res.data);
+            setMessage('Supply list generated from trip conditions.');
+        } catch (error) {
+            console.error(error);
+            setMessage('Could not generate supply list.');
+        }
     };
 
     const resetCurrentSupplyList = async () => {
         if (!supplyList?.id) return;
         const res = await api.post<SupplyList>(`/SupplyList/${supplyList.id}/resetCurrentSupplyList`);
         setSupplyList(res.data);
+        setMessage('Current supply list reset.');
     };
 
     useEffect(() => { requestTripData(); }, []);
 
     return (
-        <div className="container page-grid">
-            <section>
-                <h2>Supply list</h2>
-                <div className="data-list">
+        <div className="workspace">
+            <header className="page-head">
+                <span className="eyebrow">Supply diagram P10</span>
+                <h1>Trip supply list</h1>
+            </header>
+
+            <div className="page-grid">
+            <section className="panel">
+                <div className="section-title">
+                    <h2>Generated items</h2>
+                    {supplyList && <span>{supplyList.items.length} items</span>}
+                </div>
+                <div className="data-list dense">
                     {supplyList?.items.map(item => (
                         <article className="data-card" key={item.id ?? item.name}>
                             <strong>{item.name}</strong>
@@ -35,11 +52,12 @@ export const SupplyListPage = () => {
                             <span>Quantity: {item.quantity}</span>
                         </article>
                     ))}
+                    {!supplyList && <div className="empty-state">Select a trip and create the list.</div>}
                 </div>
             </section>
 
             <section className="panel">
-                <h3>Create supply list</h3>
+                <h2>Create supply list</h2>
                 <label>Trip</label>
                 <select value={tripId} onChange={e => setTripId(e.target.value)}>
                     <option value="">Select trip</option>
@@ -49,7 +67,9 @@ export const SupplyListPage = () => {
                     <button className="btn btn-primary" onClick={createSupplyList}>Create</button>
                     <button className="btn btn-outline" onClick={resetCurrentSupplyList}>Reset</button>
                 </div>
+                {message && <p className="status-line">{message}</p>}
             </section>
+            </div>
         </div>
     );
 };

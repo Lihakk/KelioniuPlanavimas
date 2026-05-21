@@ -1,4 +1,4 @@
-import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, NavLink } from 'react-router-dom';
 import { Home } from './Views/Home';
 import { POIList } from './Views/Admin/POI/POIList';
 import { POICreate } from './Views/Admin/POI/POICreate';
@@ -9,21 +9,25 @@ import { TripsPage } from './Views/Travel/TripsPage';
 import { PaymentsPage } from './Views/Travel/PaymentsPage';
 import { ReviewsPage } from './Views/Travel/ReviewsPage';
 import { SupplyListPage } from './Views/Travel/SupplyListPage';
+import { AccountsPage } from './Views/Travel/AccountsPage';
 import './App.css';
 
 function App() {
+  const navClass = ({ isActive }: { isActive: boolean }) => `nav-link${isActive ? ' active' : ''}`;
+
   return (
     <Router>
       <nav className="navbar">
-        <Link to="/" className="nav-link logo">Keliones</Link>
+        <NavLink to="/" className={({ isActive }) => `nav-link logo${isActive ? ' active' : ''}`}>Keliones</NavLink>
         <div className="nav-items">
-          <Link to="/" className="nav-link">Main</Link>
-          <Link to="/list" className="nav-link">POI</Link>
-          <Link to="/routes" className="nav-link">Routes</Link>
-          <Link to="/trips" className="nav-link">Trips</Link>
-          <Link to="/payments" className="nav-link">Payments</Link>
-          <Link to="/reviews" className="nav-link">Reviews</Link>
-          <Link to="/supplies" className="nav-link">Supplies</Link>
+          <NavLink to="/" className={navClass}>Main</NavLink>
+          <NavLink to="/trips" className={navClass}>Trips</NavLink>
+          <NavLink to="/routes" className={navClass}>Routes</NavLink>
+          <NavLink to="/payments" className={navClass}>Payments</NavLink>
+          <NavLink to="/reviews" className={navClass}>Reviews</NavLink>
+          <NavLink to="/supplies" className={navClass}>Supplies</NavLink>
+          <NavLink to="/list" className={navClass}>POI</NavLink>
+          <NavLink to="/accounts" className={navClass}>Accounts</NavLink>
         </div>
       </nav>
 
@@ -38,6 +42,7 @@ function App() {
         <Route path="/payments" element={<PaymentsPage />} />
         <Route path="/reviews" element={<ReviewsPage />} />
         <Route path="/supplies" element={<SupplyListPage />} />
+        <Route path="/accounts" element={<AccountsPage />} />
       </Routes>
     </Router>
   );

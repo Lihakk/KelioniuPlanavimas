@@ -20,6 +20,7 @@ public class POIController : ControllerBase
         _httpClient = httpClientFactory.CreateClient();
         _configuration = configuration;
         _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("KelionesPOI/1.0");
+        _httpClient.Timeout = TimeSpan.FromSeconds(2);
     }
 
     [HttpGet]
@@ -123,6 +124,10 @@ public class POIController : ControllerBase
 
                 return StatusCode(StatusCodes.Status502BadGateway, $"External map API failed: {ex.Message}");
             }
+            catch (TaskCanceledException)
+            {
+                return getKnownPOI(request.City);
+            }
             catch (InvalidOperationException ex)
             {
                 return BadRequest(ex.Message);
@@ -187,6 +192,10 @@ public class POIController : ControllerBase
         {
             return getKnownPOI(city.Name);
         }
+        catch (TaskCanceledException)
+        {
+            return getKnownPOI(city.Name);
+        }
     }
 
     private List<PointOfInterest> cleanRoadData(List<PointOfInterest> pois)
@@ -225,6 +234,10 @@ public class POIController : ControllerBase
                 double.Parse(first.GetProperty("lon").GetString() ?? "0", CultureInfo.InvariantCulture));
         }
         catch (HttpRequestException)
+        {
+            return getKnownCity(city);
+        }
+        catch (TaskCanceledException)
         {
             return getKnownCity(city);
         }
