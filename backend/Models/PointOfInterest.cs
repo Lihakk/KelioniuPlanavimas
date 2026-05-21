@@ -11,5 +11,17 @@ namespace backend.Models
         public float Rating { get; set; }
         public string Longitude { get; set; } = string.Empty;
         public string Latitude { get; set; } = string.Empty;
+
+        public bool checkPOI()
+        {
+            return !string.IsNullOrWhiteSpace(Name)
+                && !string.IsNullOrWhiteSpace(Type)
+                && Rating is >= 0 and <= 5;
+        }
+
+        public bool checkPOIEdit()
+        {
+            return Id > 0 && checkPOI();
+        }
     }
 }
