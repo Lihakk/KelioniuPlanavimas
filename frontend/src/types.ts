@@ -81,23 +81,22 @@ export interface Review {
     rating: number;
     date: string;
 }
-
-export interface Item {
+export type Item = {
     id?: number;
     supplyListId?: number;
     name: string;
     type: string;
     quantity: number;
     isPacked: boolean;
+    reason?: string;
 }
 
-export interface SupplyList {
-    id?: number;
+export type SupplyList = {
+    id: number;
     tripId: number;
-    dateCreated: string;
+    weatherSummary?: string;
     items: Item[];
 }
-
 export interface TripRecommendation {
     tripId: number;
     name: string;
@@ -130,3 +129,4 @@ export interface RecommendationPreferences {
     budget: number;
     weatherPreference: string;
 }
+

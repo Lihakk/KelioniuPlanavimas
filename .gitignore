@@ -18,3 +18,5 @@ out/
 # OS junk
 .DS_Store
 Thumbs.db
+frontend/package-lock.json
+backend/appsettings.json
