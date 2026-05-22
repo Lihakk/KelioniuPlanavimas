@@ -33,7 +33,12 @@ export const SupplyListPage = () => {
 
         try {
             await api.put(`/SupplyList/${supplyList.id}`, {
-                items: supplyList.items
+                items: supplyList.items.map(item => ({
+                    id: item.id,
+                    name: item.name,
+                    type: item.type,
+                    quantity: item.quantity
+                }))
             });
 
             setMessage('Supply list saved.');
@@ -125,7 +130,11 @@ export const SupplyListPage = () => {
                     {supplyList?.weatherSummary && (
                         <p className="status-line">{supplyList.weatherSummary}</p>
                     )}
-
+                    {supplyList && (
+                        <p className="status-line">
+                            Created: {new Date(supplyList.dateCreated).toLocaleString()}
+                        </p>
+                    )}
                     <div className="data-list dense">
                         {supplyList?.items.map(item => (
                             <article className="data-card" key={item.id ?? item.name}>

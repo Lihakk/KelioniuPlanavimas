@@ -90,7 +90,6 @@ public class SupplyListController : ControllerBase
 
         return supplyList;
     }
-
     [HttpPut("{id}")]
     public async Task<IActionResult> updateSavedSupplyList(int id, [FromBody] SupplyListUpdateRequest request)
     {
@@ -112,13 +111,12 @@ public class SupplyListController : ControllerBase
                 existingItem.Name = updatedItem.Name.Trim();
                 existingItem.Type = updatedItem.Type.Trim();
                 existingItem.Quantity = Math.Max(1, updatedItem.Quantity);
-                existingItem.Reason = updatedItem.Reason?.Trim();
             }
         }
 
         await _context.SaveChangesAsync();
 
-        return Ok(new { message = "display updated list", supplyList.Id });
+        return Ok(new { message = "Supply list saved.", supplyList.Id });
     }
 
     [HttpPost("{id}/resetCurrentSupplyList")]
@@ -455,9 +453,17 @@ public class SupplyListController : ControllerBase
             {
                 var weatherBitKey = _configuration["ExternalApis:WeatherBitKey"];
 
-                var weather = !string.IsNullOrWhiteSpace(weatherBitKey)
-                    ? await requestWeatherBitData(latitude, longitude, weatherBitKey, cancellationToken)
-                    : await requestOpenMeteoData(latitude, longitude, startDate, endDate, cancellationToken);
+                if (string.IsNullOrWhiteSpace(weatherBitKey))
+                {
+                    return new WeatherConditions(18, 0, "WeatherBit key is missing", 0);
+                }
+
+                var weather = await requestWeatherBitData(
+                    latitude,
+                    longitude,
+                    weatherBitKey,
+                    cancellationToken
+                );
 
                 weather = evaluateWeatherData(weather);
 
@@ -474,7 +480,7 @@ public class SupplyListController : ControllerBase
             attemptCount++;
         }
 
-        return new WeatherConditions(18, 0, "Weather unavailable", 0);
+        return new WeatherConditions(18, 0, "WeatherBit weather unavailable", 0);
     }
 
     private WeatherConditions evaluateWeatherData(WeatherConditions weather)
@@ -519,35 +525,6 @@ public class SupplyListController : ControllerBase
         );
     }
 
-    private async Task<WeatherConditions> requestOpenMeteoData(
-        double latitude,
-        double longitude,
-        DateTime startDate,
-        DateTime endDate,
-        CancellationToken cancellationToken)
-    {
-        var openMeteoUrl = _configuration["ExternalApis:OpenMeteoUrl"] ?? "https://api.open-meteo.com/v1/forecast";
-        var url = $"{openMeteoUrl}?latitude={latitude.ToString(CultureInfo.InvariantCulture)}&longitude={longitude.ToString(CultureInfo.InvariantCulture)}&start_date={startDate:yyyy-MM-dd}&end_date={endDate:yyyy-MM-dd}&daily=temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=auto";
-
-        using var response = await _httpClient.GetAsync(url, cancellationToken);
-        response.EnsureSuccessStatusCode();
-
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var json = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
-
-        var daily = json.RootElement.GetProperty("daily");
-        var max = daily.GetProperty("temperature_2m_max").EnumerateArray().Select(item => item.GetDouble()).ToList();
-        var min = daily.GetProperty("temperature_2m_min").EnumerateArray().Select(item => item.GetDouble()).ToList();
-        var precipitation = daily.GetProperty("precipitation_sum").EnumerateArray().Sum(item => item.GetDouble());
-
-        return new WeatherConditions(
-            (max.Average() + min.Average()) / 2,
-            precipitation,
-            "Open-Meteo forecast",
-            0
-        );
-    }
-
     private static Item createItem(string name, string type, int quantity, string? reason = null)
     {
         return new Item
@@ -584,7 +561,6 @@ public class SupplyListItemUpdateRequest
     public string Name { get; set; } = "";
     public string Type { get; set; } = "";
     public int Quantity { get; set; }
-    public string? Reason { get; set; }
 }
 
 public record TripConditions(

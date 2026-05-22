@@ -94,6 +94,7 @@ export type Item = {
 export type SupplyList = {
     id: number;
     tripId: number;
+    dateCreated: string;
     weatherSummary?: string;
     items: Item[];
 }
