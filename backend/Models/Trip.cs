@@ -12,6 +12,7 @@ namespace backend.Models
         public string SelectedAccommodation { get; set; } = string.Empty;
         public string SelectedFlight { get; set; } = string.Empty;
         public string SelectedCar { get; set; } = string.Empty;
+        public decimal Price { get; set; } = 0m;
 
         public bool checkTrip()
         {

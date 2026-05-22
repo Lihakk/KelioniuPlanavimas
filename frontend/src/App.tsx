@@ -8,6 +8,7 @@ import { RoutesPage } from './Views/Travel/RoutesPage';
 import { TripsPage } from './Views/Travel/TripsPage';
 import { PaymentsPage } from './Views/Travel/PaymentsPage';
 import { ReviewsPage } from './Views/Travel/ReviewsPage';
+import { RecommendationsPage } from './Views/Travel/RecommendationsPage';
 import { SupplyListPage } from './Views/Travel/SupplyListPage';
 import { AccountsPage } from './Views/Travel/AccountsPage';
 import './App.css';
@@ -25,6 +26,7 @@ function App() {
           <NavLink to="/routes" className={navClass}>Routes</NavLink>
           <NavLink to="/payments" className={navClass}>Payments</NavLink>
           <NavLink to="/reviews" className={navClass}>Reviews</NavLink>
+          <NavLink to="/recommendations" className={navClass}>Recommendations</NavLink>
           <NavLink to="/supplies" className={navClass}>Supplies</NavLink>
           <NavLink to="/list" className={navClass}>POI</NavLink>
           <NavLink to="/accounts" className={navClass}>Accounts</NavLink>
@@ -41,6 +43,7 @@ function App() {
         <Route path="/trips" element={<TripsPage />} />
         <Route path="/payments" element={<PaymentsPage />} />
         <Route path="/reviews" element={<ReviewsPage />} />
+        <Route path="/recommendations" element={<RecommendationsPage />} />
         <Route path="/supplies" element={<SupplyListPage />} />
         <Route path="/accounts" element={<AccountsPage />} />
       </Routes>

@@ -120,7 +120,7 @@ public class ReviewController : ControllerBase
             {
                 TripId = trip.Id,
                 Name = trip.Name,
-                Score = await calculateScoreWeights(trip, reviews, preferences, cancellationToken),
+                Score = await calculateScoreWeight(trip, reviews, preferences, cancellationToken),
                 Reason = trip.Route == null ? "No route assigned" : $"Route: {trip.Route.getRoute()}"
             });
         }
@@ -128,7 +128,7 @@ public class ReviewController : ControllerBase
         return result.OrderByDescending(item => item.Score).ToList();
     }
 
-    private async Task<int> calculateScoreWeights(Trip trip, List<Review> reviews, RecommendationPreferences? preferences, CancellationToken cancellationToken = default)
+    private async Task<int> calculateScoreWeight(Trip trip, List<Review> reviews, RecommendationPreferences? preferences, CancellationToken cancellationToken = default)
     {
         return await calculateWeatherScore(trip, preferences, cancellationToken)
             + calculateBudgetScore(preferences)
@@ -166,13 +166,23 @@ public class ReviewController : ControllerBase
 
     private int calculateRatingScore(Trip trip, List<Review> reviews)
     {
-        var tripReviews = reviews.Where(review => review.TripId == trip.Id || review.TripElementId == trip.Id).ToList();
+        var tripReviews = getReviewData(trip, reviews);
         if (tripReviews.Count == 0)
         {
             return 5;
         }
 
         return (int)Math.Round(tripReviews.Average(review => review.Rating) * 4);
+    }
+
+    private List<Review> getReviewData(Trip trip, List<Review> reviews)
+    {
+        return reviews.Where(review => review.TripId == trip.Id || review.TripElementId == trip.Id).ToList();
+    }
+
+    private List<Trip> getTripData()
+    {
+        return _context.Trips.Include(item => item.Route).ThenInclude(route => route!.RoutePoints).ToList();
     }
 
     private int calculateDateScore(Trip trip)
@@ -184,7 +194,8 @@ public class ReviewController : ControllerBase
     {
         analyzePreferences(preferences);
         evaluateAlternatives(preferences);
-        return await generateRecommendations(trips, reviews, preferences, cancellationToken);
+        var recommendations = await generateRecommendations(trips, reviews, preferences, cancellationToken);
+        return recommendations.Select(rec => evaluateRecommendation(rec, trips, preferences)).ToList();
     }
 
     private async Task<WeatherConditions> requestWeatherData(double latitude, double longitude, DateTime startDate, DateTime endDate, CancellationToken cancellationToken = default)
@@ -213,8 +224,7 @@ public class ReviewController : ControllerBase
         return new WeatherConditions(
             data.Average(item => item.GetProperty("temp").GetDouble()),
             data.Sum(item => item.TryGetProperty("precip", out var precip) ? precip.GetDouble() : 0),
-            data.FirstOrDefault().TryGetProperty("weather", out var weather) ? weather.GetProperty("description").GetString() ?? "WeatherBit forecast" : "WeatherBit forecast",
-            data.Average(item => item.TryGetProperty("uv", out var uv) ? uv.GetDouble() : 0));
+            data.FirstOrDefault().TryGetProperty("weather", out var weather) ? weather.GetProperty("description").GetString() ?? "WeatherBit forecast" : "WeatherBit forecast");
     }
 
     private async Task<WeatherConditions> requestOpenMeteoData(double latitude, double longitude, DateTime startDate, DateTime endDate, CancellationToken cancellationToken)
@@ -232,7 +242,74 @@ public class ReviewController : ControllerBase
         var min = daily.GetProperty("temperature_2m_min").EnumerateArray().Select(item => item.GetDouble()).ToList();
         var precipitation = daily.GetProperty("precipitation_sum").EnumerateArray().Sum(item => item.GetDouble());
 
-        return new WeatherConditions((max.Average() + min.Average()) / 2, precipitation, "Open-Meteo forecast",0);
+        return new WeatherConditions((max.Average() + min.Average()) / 2, precipitation, "Open-Meteo forecast");
+    }
+
+    // ============== PERSONALIZATION EVALUATION FUNCTIONS ==============
+
+    private TripRecommendation evaluateRecommendation(TripRecommendation recommendation, List<Trip> trips, RecommendationPreferences preferences)
+    {
+        var trip = trips.FirstOrDefault(t => t.Id == recommendation.TripId);
+        if (trip != null && trip.Price > 0)
+        {
+            var costInfo = PredictCost(trip);
+            recommendation.Reason += $" | {costInfo}";
+        }
+
+        return recommendation;
+    }
+
+    private string PredictCost(Trip trip)
+    {
+        var travelMonth = trip.StartDate.Month;
+        var seasonalFactor = calculateSeasonalFactor(travelMonth);
+        var seasonalPrice = trip.Price * seasonalFactor;
+        var priceRecommendation = predictPriceTrend(trip);
+        
+        return $"Current: ${seasonalPrice:F2} ({priceRecommendation})";
+    }
+
+    private decimal calculateSeasonalFactor(int month)
+    {
+        return month switch
+        {
+            12 or 1 or 7 or 8 => 1.3m,  // High season: holidays & summer
+            6 or 9 => 1.15m,             // Shoulder: early summer, early fall
+            2 or 3 or 4 or 5 => 0.85m,   // Low season: winter/spring
+            10 or 11 => 0.9m,            // Shoulder: fall
+            _ => 1m
+        };
+    }
+
+    private string predictPriceTrend(Trip trip)
+    {
+        var tripReviews = _context.Reviews
+            .Where(r => r.TripId == trip.Id)
+            .OrderBy(r => r.Date)
+            .ToList();
+
+        if (tripReviews.Count < 2)
+        {
+            return "BUY_NOW";  // Not enough data
+        }
+
+        var recentReviews = tripReviews.TakeLast(3).ToList();
+        var oldReviews = tripReviews.SkipLast(3).ToList();
+
+        var recentAvgRating = recentReviews.Any() ? recentReviews.Average(r => r.Rating) : 0;
+        var oldAvgRating = oldReviews.Any() ? oldReviews.Average(r => r.Rating) : 0;
+
+        if (recentAvgRating > oldAvgRating + 0.5)
+        {
+            return "RISING";  // Ratings improving,
+        }
+
+        if (recentAvgRating < oldAvgRating - 0.5)
+        {
+            return "WAIT";    // Ratings declining,
+        }
+
+        return "BUY_NOW";     // Stable ratings,
     }
 }
 
@@ -251,4 +328,4 @@ public class TripRecommendation
     public string Reason { get; set; } = string.Empty;
 }
 
-public record WeatherConditions(double AverageTemperatureC, double PrecipitationMm, string Description, double UvIndex);
+public record WeatherConditions(double AverageTemperatureC, double PrecipitationMm, string Description, double UvIndex = 0);
