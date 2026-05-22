@@ -21,10 +21,12 @@ export const SupplyListPage = () => {
 
         try {
             const res = await api.get<SupplyList>(`/SupplyList/trip/${selectedTripId}`);
+
             setSupplyList(res.data);
             setMessage('Saved supply list loaded.');
         } catch (error) {
             console.error(error);
+
             setSupplyList(null);
             setMessage('No saved supply list for this trip yet.');
         }
@@ -34,12 +36,15 @@ export const SupplyListPage = () => {
         if (!tripId) return;
 
         try {
-            const res = await api.post<SupplyList>(`/SupplyList/trip/${tripId}`, {
-                hasLaundry
-            });
+            const res = await api.post<SupplyList>(
+                `/SupplyList/trip/${tripId}`,
+                {
+                    hasLaundry
+                }
+            );
 
             setSupplyList(res.data);
-            setMessage('Supply list generated from trip conditions.');
+            setMessage('Generated supply list displayed.');
         } catch (error) {
             console.error(error);
             setMessage('Could not generate supply list.');
@@ -59,27 +64,29 @@ export const SupplyListPage = () => {
                 }))
             });
 
-            setMessage('Supply list saved.');
+            setMessage('Updated supply list saved.');
         } catch (error) {
             console.error(error);
             setMessage('Could not save supply list.');
         }
     };
 
-    const regenerateSupplyList = async () => {
+    const createNewSupplyList = async () => {
         if (!supplyList?.id) return;
 
         try {
             const res = await api.post<SupplyList>(
                 `/SupplyList/${supplyList.id}/regenerate`,
-                { hasLaundry }
+                {
+                    hasLaundry
+                }
             );
 
             setSupplyList(res.data);
-            setMessage('Supply list regenerated.');
+            setMessage('New supply list created.');
         } catch (error) {
             console.error(error);
-            setMessage('Could not regenerate supply list.');
+            setMessage('Could not create new supply list.');
         }
     };
 
@@ -95,11 +102,14 @@ export const SupplyListPage = () => {
             setMessage('Current supply list reset.');
         } catch (error) {
             console.error(error);
-            setMessage('Could not reset supply list.');
+            setMessage('Could not reset current supply list.');
         }
     };
 
-    const updateItemQuantity = (itemId: number | undefined, value: string) => {
+    const updateItemQuantity = (
+        itemId: number | undefined,
+        value: string
+    ) => {
         if (!supplyList) return;
 
         setSupplyList({
@@ -112,7 +122,10 @@ export const SupplyListPage = () => {
         });
     };
 
-    const updateItemName = (itemId: number | undefined, value: string) => {
+    const updateItemName = (
+        itemId: number | undefined,
+        value: string
+    ) => {
         if (!supplyList) return;
 
         setSupplyList({
@@ -132,7 +145,10 @@ export const SupplyListPage = () => {
     return (
         <div className="workspace">
             <header className="page-head">
-                <span className="eyebrow">Supply diagram P10</span>
+                <span className="eyebrow">
+                    Manage trip supply list
+                </span>
+
                 <h1>Trip supply list</h1>
             </header>
 
@@ -140,7 +156,10 @@ export const SupplyListPage = () => {
                 <section className="panel">
                     <div className="section-title">
                         <h2>Generated items</h2>
-                        {supplyList && <span>{supplyList.items.length} items</span>}
+
+                        {supplyList && (
+                            <span>{supplyList.items.length} items</span>
+                        )}
                     </div>
 
                     {supplyList?.weatherSummary && (
@@ -151,21 +170,34 @@ export const SupplyListPage = () => {
 
                     {supplyList && (
                         <p className="status-line muted">
-                            Created: {new Date(supplyList.dateCreated).toLocaleString()}
+                            Created:{' '}
+                            {new Date(
+                                supplyList.dateCreated
+                            ).toLocaleString()}
                         </p>
                     )}
 
                     <div className="data-list dense">
                         {supplyList?.items.map(item => (
-                            <article className="data-card supply-item" key={item.id ?? item.name}>
+                            <article
+                                className="data-card supply-item"
+                                key={item.id ?? item.name}
+                            >
                                 <div className="supply-item-top">
                                     <input
                                         className="item-name-input"
                                         value={item.name}
-                                        onChange={e => updateItemName(item.id, e.target.value)}
+                                        onChange={e =>
+                                            updateItemName(
+                                                item.id,
+                                                e.target.value
+                                            )
+                                        }
                                     />
 
-                                    <span className="item-type">{item.type}</span>
+                                    <span className="item-type">
+                                        {item.type}
+                                    </span>
                                 </div>
 
                                 <div className="supply-item-bottom">
@@ -177,27 +209,34 @@ export const SupplyListPage = () => {
                                             type="number"
                                             min="1"
                                             value={item.quantity}
-                                            onChange={e => updateItemQuantity(item.id, e.target.value)}
+                                            onChange={e =>
+                                                updateItemQuantity(
+                                                    item.id,
+                                                    e.target.value
+                                                )
+                                            }
                                         />
                                     </div>
                                 </div>
 
                                 {item.reason && (
-                                    <small className="item-reason">{item.reason}</small>
+                                    <small className="item-reason">
+                                        {item.reason}
+                                    </small>
                                 )}
                             </article>
                         ))}
 
                         {!supplyList && (
                             <div className="empty-state">
-                                Select a trip and create the list.
+                                Select a trip and generate a supply list.
                             </div>
                         )}
                     </div>
                 </section>
 
                 <section className="panel">
-                    <h2>Create supply list</h2>
+                    <h2>Manage trip supply list</h2>
 
                     <div className="form-group">
                         <label>Trip</label>
@@ -206,13 +245,23 @@ export const SupplyListPage = () => {
                             value={tripId}
                             onChange={e => {
                                 const selectedTripId = e.target.value;
+
                                 setTripId(selectedTripId);
-                                loadSupplyListForTrip(selectedTripId);
+
+                                loadSupplyListForTrip(
+                                    selectedTripId
+                                );
                             }}
                         >
-                            <option value="">Select trip</option>
+                            <option value="">
+                                Select trip
+                            </option>
+
                             {trips.map(trip => (
-                                <option key={trip.id} value={trip.id}>
+                                <option
+                                    key={trip.id}
+                                    value={trip.id}
+                                >
                                     {trip.name}
                                 </option>
                             ))}
@@ -223,30 +272,51 @@ export const SupplyListPage = () => {
                         <input
                             type="checkbox"
                             checked={hasLaundry}
-                            onChange={e => setHasLaundry(e.target.checked)}
+                            onChange={e =>
+                                setHasLaundry(e.target.checked)
+                            }
                         />
-                        <span>Accommodation has laundry</span>
+
+                        <span>
+                            Accommodation has laundry
+                        </span>
                     </label>
 
                     <div className="supply-actions">
-                        <button className="btn btn-primary" onClick={createSupplyList}>
-                            Create
+                        <button
+                            className="btn btn-primary"
+                            onClick={createSupplyList}
+                        >
+                            Generate supply list
                         </button>
 
-                        <button className="btn btn-outline" onClick={saveSupplyList}>
-                            Save
+                        <button
+                            className="btn btn-outline"
+                            onClick={saveSupplyList}
+                        >
+                            Save supply list
                         </button>
 
-                        <button className="btn btn-outline" onClick={regenerateSupplyList}>
-                            Regenerate
+                        <button
+                            className="btn btn-outline"
+                            onClick={createNewSupplyList}
+                        >
+                            Create new supply list
                         </button>
 
-                        <button className="btn btn-outline" onClick={resetCurrentSupplyList}>
-                            Reset
+                        <button
+                            className="btn btn-outline"
+                            onClick={resetCurrentSupplyList}
+                        >
+                            Reset current supply list
                         </button>
                     </div>
 
-                    {message && <p className="status-line">{message}</p>}
+                    {message && (
+                        <p className="status-line">
+                            {message}
+                        </p>
+                    )}
                 </section>
             </div>
         </div>
