@@ -22,66 +22,62 @@ public class SupplyListController : ControllerBase
     }
 
     [HttpGet("trip/{tripId}")]
-    public async Task<ActionResult<SupplyList>> getSupplyListByTrip(int tripId, CancellationToken cancellationToken)
+    public async Task<ActionResult<SupplyList>> checkSavedSupplyList(int tripId, CancellationToken cancellationToken)
     {
-        var saved = await _context.SupplyLists
-            .Include(item => item.Items)
-            .FirstOrDefaultAsync(item => item.TripId == tripId, cancellationToken);
+        var savedSupplyList = await getSavedSupplyList(tripId, cancellationToken);
 
-        if (saved == null)
+        if (!checkSavedSupplyList(savedSupplyList))
         {
             return NotFound();
         }
 
-        return saved;
+        return savedSupplyList!;
     }
 
     [HttpPost("trip/{tripId}")]
-    public async Task<ActionResult<SupplyList>> createSupplyListByConditions(
+    public async Task<ActionResult<SupplyList>> createSupplyList(
         int tripId,
         [FromBody] SupplyListRequest? request,
         CancellationToken cancellationToken)
     {
         request ??= new SupplyListRequest();
-        var existing = await _context.SupplyLists
-            .Include(item => item.Items)
-            .FirstOrDefaultAsync(item => item.TripId == tripId, cancellationToken);
 
-        if (existing != null)
+        var savedSupplyList = await getSavedSupplyList(tripId, cancellationToken);
+
+        if (checkSavedSupplyList(savedSupplyList))
         {
-            return existing;
+            return savedSupplyList!;
         }
-        var trip = await _context.Trips
-            .Include(item => item.Route)
-            .ThenInclude(route => route!.RoutePoints)
-            .FirstOrDefaultAsync(item => item.Id == tripId, cancellationToken);
+
+        var trip = await getTripData(tripId, cancellationToken);
 
         if (trip == null)
         {
             return NotFound();
         }
 
-        analyzeTripParameters(trip);
-
         if (!validateTripData(trip))
         {
             return BadRequest("Trip data is not valid for supply list.");
         }
 
-        var supplyList = await requestNewSupplyList(trip, request.HasLaundry, cancellationToken);
+        var tripConditions = await determineTripConditions(trip, cancellationToken);
 
-        _context.SupplyLists.Add(supplyList);
-        await _context.SaveChangesAsync(cancellationToken);
+        analyzeTripParameters(tripConditions);
+
+        var supplyList = generateSupplyList(trip, tripConditions, request.HasLaundry);
+
+        await saveNewSupplyList(supplyList, cancellationToken);
 
         return supplyList;
     }
 
     [HttpGet("{id}")]
-    public async Task<ActionResult<SupplyList>> getSavedSupplyList(int id)
+    public async Task<ActionResult<SupplyList>> getSupplyList(int id, CancellationToken cancellationToken)
     {
         var supplyList = await _context.SupplyLists
             .Include(item => item.Items)
-            .FirstOrDefaultAsync(item => item.Id == id);
+            .FirstOrDefaultAsync(item => item.Id == id, cancellationToken);
 
         if (supplyList == null)
         {
@@ -90,8 +86,9 @@ public class SupplyListController : ControllerBase
 
         return supplyList;
     }
+
     [HttpPut("{id}")]
-    public async Task<IActionResult> updateSavedSupplyList(int id, [FromBody] SupplyListUpdateRequest request)
+    public async Task<IActionResult> updateSupplyList(int id, [FromBody] SupplyListUpdateRequest request)
     {
         var supplyList = await _context.SupplyLists
             .Include(item => item.Items)
@@ -102,29 +99,19 @@ public class SupplyListController : ControllerBase
             return NotFound();
         }
 
-        foreach (var updatedItem in request.Items)
-        {
-            var existingItem = supplyList.Items.FirstOrDefault(item => item.Id == updatedItem.Id);
+        updateItems(supplyList, request.Items);
 
-            if (existingItem != null)
-            {
-                existingItem.Name = updatedItem.Name.Trim();
-                existingItem.Type = updatedItem.Type.Trim();
-                existingItem.Quantity = Math.Max(1, updatedItem.Quantity);
-            }
-        }
+        await saveSupplyList(supplyList);
 
-        await _context.SaveChangesAsync();
-
-        return Ok(new { message = "Supply list saved.", supplyList.Id });
+        return Ok(new { message = "Updated list saved.", supplyList.Id });
     }
 
     [HttpPost("{id}/resetCurrentSupplyList")]
-    public async Task<ActionResult<SupplyList>> resetCurrentSupplyList(int id)
+    public async Task<ActionResult<SupplyList>> resetCurrentSupplyList(int id, CancellationToken cancellationToken)
     {
         var supplyList = await _context.SupplyLists
             .Include(item => item.Items)
-            .FirstOrDefaultAsync(item => item.Id == id);
+            .FirstOrDefaultAsync(item => item.Id == id, cancellationToken);
 
         if (supplyList == null)
         {
@@ -133,12 +120,14 @@ public class SupplyListController : ControllerBase
 
         _context.Items.RemoveRange(supplyList.Items);
         resetCurrentSupplyList(supplyList);
-        await _context.SaveChangesAsync();
+
+        await _context.SaveChangesAsync(cancellationToken);
 
         return supplyList;
     }
+
     [HttpPost("{id}/regenerate")]
-    public async Task<ActionResult<SupplyList>> regenerateSupplyList(
+    public async Task<ActionResult<SupplyList>> createNewSupplyList(
         int id,
         [FromBody] SupplyListRequest? request,
         CancellationToken cancellationToken)
@@ -154,55 +143,53 @@ public class SupplyListController : ControllerBase
             return NotFound();
         }
 
-        var trip = await _context.Trips
-            .Include(item => item.Route)
-            .ThenInclude(route => route!.RoutePoints)
-            .FirstOrDefaultAsync(item => item.Id == supplyList.TripId, cancellationToken);
+        var trip = await getTripData(supplyList.TripId, cancellationToken);
 
         if (trip == null)
         {
             return NotFound();
         }
 
-        var conditions = await determineTripConditions(trip, cancellationToken);
-        var newItems = createSupplyListByConditions(conditions, trip, request.HasLaundry);
+        var tripConditions = await determineTripConditions(trip, cancellationToken);
+
+        analyzeTripParameters(tripConditions);
 
         _context.Items.RemoveRange(supplyList.Items);
+        resetCurrentSupplyList(supplyList);
 
-        supplyList.Items = newItems;
+        var newSupplyList = generateSupplyList(trip, tripConditions, request.HasLaundry);
 
-        updateSupplyListByRules(supplyList, trip, conditions);
+        supplyList.Items = newSupplyList.Items;
+        supplyList.WeatherSummary = newSupplyList.WeatherSummary;
 
         await _context.SaveChangesAsync(cancellationToken);
 
-        supplyList.WeatherSummary = createWeatherSummary(conditions, request.HasLaundry);
-
         return supplyList;
     }
-    private bool checkSavedSupplyList(SupplyList? supplyList)
+
+    private async Task<SupplyList?> getSavedSupplyList(int tripId, CancellationToken cancellationToken)
     {
-        return supplyList != null;
+        return await _context.SupplyLists
+            .Include(item => item.Items)
+            .FirstOrDefaultAsync(item => item.TripId == tripId, cancellationToken);
     }
 
-    private async Task<SupplyList> requestNewSupplyList(
-        Trip trip,
-        bool hasLaundry,
-        CancellationToken cancellationToken = default)
+    private bool checkSavedSupplyList(SupplyList? savedSupplyList)
     {
-        var conditions = await determineTripConditions(trip, cancellationToken);
-        var items = createSupplyListByConditions(conditions, trip, hasLaundry);
+        return savedSupplyList != null;
+    }
 
-        var supplyList = new SupplyList
-        {
-            TripId = trip.Id,
-            WeatherSummary = createWeatherSummary(conditions, hasLaundry)
-        };
+    private async Task<Trip?> getTripData(int tripId, CancellationToken cancellationToken)
+    {
+        return await _context.Trips
+            .Include(item => item.Route)
+            .ThenInclude(route => route!.RoutePoints)
+            .FirstOrDefaultAsync(item => item.Id == tripId, cancellationToken);
+    }
 
-        supplyList.saveGeneratedSupplyList(items);
-
-        updateSupplyListByRules(supplyList, trip, conditions);
-
-        return supplyList;
+    private bool validateTripData(Trip trip)
+    {
+        return trip.checkTrip();
     }
 
     private async Task<TripConditions> determineTripConditions(Trip trip, CancellationToken cancellationToken = default)
@@ -216,89 +203,196 @@ public class SupplyListController : ControllerBase
             return new TripConditions(trip.determineTripConditions(), 18, 0, "No weather coordinates", 0);
         }
 
-        var weather = await requestWeatherData(latitude, longitude, trip.StartDate, trip.EndDate, cancellationToken);
-        return determineTripConditions(trip.StartDate, trip.EndDate, weather);
-    }
+        var weatherData = await requestWeatherData(
+            latitude,
+            longitude,
+            trip.StartDate,
+            trip.EndDate,
+            cancellationToken
+        );
 
-    private TripConditions determineTripConditions(DateTime startDate, DateTime endDate, WeatherConditions weather)
-    {
-        var days = Math.Max(1, (endDate.Date - startDate.Date).Days + 1);
+        var tripDays = Math.Max(1, (trip.EndDate.Date - trip.StartDate.Date).Days + 1);
 
         return new TripConditions(
-            days,
-            weather.AverageTemperatureC,
-            weather.PrecipitationMm,
-            weather.Description,
-            weather.UvIndex
+            tripDays,
+            weatherData.AverageTemperatureC,
+            weatherData.PrecipitationMm,
+            weatherData.Description,
+            weatherData.UvIndex
         );
     }
 
-    private void analyzeTripParameters(Trip trip)
+    private async Task<WeatherConditions> requestWeatherData(
+        double latitude,
+        double longitude,
+        DateTime startDate,
+        DateTime endDate,
+        CancellationToken cancellationToken = default)
     {
-        trip.Name = trip.Name.Trim();
+        var attemptCount = 0;
+
+        while (attemptCount < 3)
+        {
+            try
+            {
+                var weatherBitKey = _configuration["ExternalApis:WeatherBitKey"];
+
+                if (string.IsNullOrWhiteSpace(weatherBitKey))
+                {
+                    return new WeatherConditions(18, 0, "Weather data unavailable", 0);
+                }
+
+                var weatherData = await requestWeatherBitData(
+                    latitude,
+                    longitude,
+                    weatherBitKey,
+                    cancellationToken
+                );
+
+                weatherData = evaluateWeatherData(weatherData);
+
+                if (validateWeatherData(weatherData))
+                {
+                    return weatherData;
+                }
+            }
+            catch
+            {
+                // Retry until attemptCount reaches 3.
+            }
+
+            attemptCount++;
+        }
+
+        return new WeatherConditions(18, 0, "Weather data unavailable", 0);
     }
 
-    private List<Item> createSupplyListByConditions(TripConditions conditions, Trip trip, bool hasLaundry)
+    private WeatherConditions evaluateWeatherData(WeatherConditions weatherData)
+    {
+        return weatherData with
+        {
+            Description = weatherData.Description.Trim()
+        };
+    }
+
+    private bool validateWeatherData(WeatherConditions weatherData)
+    {
+        return weatherData.AverageTemperatureC > -80 &&
+               weatherData.AverageTemperatureC < 70 &&
+               weatherData.PrecipitationMm >= 0 &&
+               weatherData.UvIndex >= 0;
+    }
+
+    private void analyzeTripParameters(TripConditions tripConditions)
+    {
+        _ = tripConditions.Days;
+        _ = tripConditions.AverageTemperatureC;
+        _ = tripConditions.PrecipitationMm;
+        _ = tripConditions.UvIndex;
+    }
+
+    private SupplyList generateSupplyList(Trip trip, TripConditions tripConditions, bool hasLaundry)
+    {
+        var supplyList = new SupplyList
+        {
+            TripId = trip.Id,
+            WeatherSummary = createWeatherSummary(tripConditions, hasLaundry)
+        };
+
+        setItemSelectRules(supplyList, trip, tripConditions, hasLaundry);
+        adjustFinalQuantities(supplyList, tripConditions);
+
+        return supplyList;
+    }
+
+    private void setItemSelectRules(SupplyList supplyList, Trip trip, TripConditions tripConditions, bool hasLaundry)
     {
         var items = new List<Item>
         {
             createItem("Passport", "Document", 1, "Basic travel document."),
             createItem("Phone charger", "Electronics", 1, "Needed for phone charging during the trip."),
-            createItem("Toiletries", "Health", 1, "Basic personal hygiene item."),
-
-            createItem("Socks", "Clothing", calculateSocks(conditions, hasLaundry),
-                createClothingReason(conditions, hasLaundry)),
-
-            createItem("Underwear", "Clothing", calculateUnderwear(conditions, hasLaundry),
-                createClothingReason(conditions, hasLaundry)),
-
-            createItem("Shirts", "Clothing", calculateShirts(conditions, hasLaundry),
-                createClothingReason(conditions, hasLaundry)),
-
-            createItem("Pants", "Clothing", calculatePants(conditions, hasLaundry),
-                "Calculated from trip duration. Usually fewer pants are needed than shirts."),
-
-            createItem("Sleepwear", "Clothing", 1,
-                "Added as a basic overnight clothing item.")
+            createItem("Toiletries", "Health", 1, "Basic personal hygiene item.")
         };
 
-        if (conditions.PrecipitationMm > 5)
+        var baseQuantities = calculateBaseClothingQuantities(tripConditions);
+
+        if (hasLaundry)
+        {
+            baseQuantities = reduceQuantities(baseQuantities);
+        }
+
+        items.Add(createItem("Socks", "Clothing", baseQuantities, createClothingReason(tripConditions, hasLaundry)));
+        items.Add(createItem("Underwear", "Clothing", baseQuantities, createClothingReason(tripConditions, hasLaundry)));
+        items.Add(createItem("Shirts", "Clothing", baseQuantities, createClothingReason(tripConditions, hasLaundry)));
+
+        items.Add(createItem(
+            "Pants",
+            "Clothing",
+            Math.Max(1, (int)Math.Ceiling(baseQuantities / 3.0)),
+            "Calculated from trip duration. Usually fewer pants are needed than shirts."
+        ));
+
+        items.Add(createItem(
+            "Sleepwear",
+            "Clothing",
+            1,
+            "Added as a basic overnight clothing item."
+        ));
+
+        addConditionalItems(items, tripConditions, trip);
+
+        supplyList.saveGeneratedSupplyList(items);
+    }
+
+    private int calculateBaseClothingQuantities(TripConditions tripConditions)
+    {
+        return Math.Max(1, tripConditions.Days);
+    }
+
+    private int reduceQuantities(int baseQuantities)
+    {
+        return Math.Max(1, Math.Min(baseQuantities, 4));
+    }
+
+    private void addConditionalItems(List<Item> items, TripConditions tripConditions, Trip trip)
+    {
+        if (tripConditions.PrecipitationMm > 5)
         {
             items.Add(createItem(
                 "Rain jacket",
                 "Weather",
                 1,
-                $"Added because expected precipitation is {conditions.PrecipitationMm:F1} mm."
+                $"Added because expected precipitation is {tripConditions.PrecipitationMm:F1} mm."
             ));
         }
 
-        if (conditions.AverageTemperatureC < 10)
+        if (tripConditions.AverageTemperatureC < 10)
         {
             items.Add(createItem(
                 "Warm jacket",
                 "Clothing",
                 1,
-                $"Added because average temperature is {conditions.AverageTemperatureC:F1}°C."
+                $"Added because average temperature is {tripConditions.AverageTemperatureC:F1}°C."
             ));
         }
 
-        if (conditions.AverageTemperatureC > 22)
+        if (tripConditions.AverageTemperatureC > 22)
         {
             items.Add(createItem(
                 "Hat",
                 "Health",
                 1,
-                $"Added because average temperature is {conditions.AverageTemperatureC:F1}°C."
+                $"Added because average temperature is {tripConditions.AverageTemperatureC:F1}°C."
             ));
         }
 
-        if (conditions.UvIndex > 5)
+        if (tripConditions.UvIndex > 5)
         {
             items.Add(createItem(
                 "Sunscreen",
                 "Health",
                 1,
-                $"Added because UV index is {conditions.UvIndex:F1}."
+                $"Added because UV index is {tripConditions.UvIndex:F1}."
             ));
         }
 
@@ -348,154 +442,57 @@ public class SupplyListController : ControllerBase
                 "Added because the route includes a nature-related place."
             ));
         }
-
-        return items;
     }
 
-    private int calculateClothingDays(int days, bool hasLaundry)
-    {
-        if (!hasLaundry)
-        {
-            return days;
-        }
-
-        return Math.Min(days, 4);
-    }
-
-    private int calculateSocks(TripConditions conditions, bool hasLaundry)
-    {
-        return calculateClothingDays(conditions.Days, hasLaundry);
-    }
-
-    private int calculateUnderwear(TripConditions conditions, bool hasLaundry)
-    {
-        return calculateClothingDays(conditions.Days, hasLaundry);
-    }
-
-    private int calculateShirts(TripConditions conditions, bool hasLaundry)
-    {
-        return Math.Max(1, calculateClothingDays(conditions.Days, hasLaundry));
-    }
-
-    private int calculatePants(TripConditions conditions, bool hasLaundry)
-    {
-        return Math.Max(1, (int)Math.Ceiling(calculateClothingDays(conditions.Days, hasLaundry) / 3.0));
-    }
-
-    private string createClothingReason(TripConditions conditions, bool hasLaundry)
-    {
-        if (hasLaundry)
-        {
-            return $"Calculated for {conditions.Days} trip days, but reduced because laundry is available.";
-        }
-
-        return $"Calculated for {conditions.Days} trip days without laundry.";
-    }
-
-    private string createWeatherSummary(TripConditions conditions, bool hasLaundry)
-    {
-        var laundryText = hasLaundry
-            ? "Laundry is available, so clothing quantities are reduced."
-            : "Laundry is not available, so clothing quantities are based on full trip duration.";
-
-        return $"Forecast: {conditions.Description}. " +
-               $"Average temperature: {conditions.AverageTemperatureC:F1}°C. " +
-               $"Precipitation: {conditions.PrecipitationMm:F1} mm. " +
-               $"UV index: {conditions.UvIndex:F1}. " +
-               laundryText;
-    }
-
-    private void reduceQuantities(SupplyList supplyList)
+    private static void adjustFinalQuantities(SupplyList supplyList, TripConditions tripConditions)
     {
         foreach (var item in supplyList.Items.Where(item => item.Type == "Clothing"))
         {
-            item.Quantity = Math.Max(1, item.Quantity - 1);
-        }
-    }
-
-    private void updateSupplyListByRules(SupplyList supplyList, Trip trip, TripConditions conditions)
-    {
-        validateTripData(trip);
-        setItemSelectRules(supplyList);
-        adjustFinalQuantities(supplyList, conditions);
-    }
-
-    private bool validateTripData(Trip trip)
-    {
-        return trip.checkTrip();
-    }
-
-    private void setItemSelectRules(SupplyList supplyList)
-    {
-        foreach (var item in supplyList.Items)
-        {
             item.Quantity = Math.Max(1, item.Quantity);
         }
+
+        if (tripConditions.AverageTemperatureC < 5)
+        {
+            var warmItem = supplyList.Items.FirstOrDefault(item => item.Name == "Warm jacket");
+
+            if (warmItem != null)
+            {
+                warmItem.Quantity = Math.Max(1, warmItem.Quantity);
+            }
+        }
+    }
+
+    private void updateItems(SupplyList supplyList, List<SupplyListItemUpdateRequest> updatedItems)
+    {
+        foreach (var updatedItem in updatedItems)
+        {
+            var existingItem = supplyList.Items.FirstOrDefault(item => item.Id == updatedItem.Id);
+
+            if (existingItem != null)
+            {
+                existingItem.Name = updatedItem.Name.Trim();
+                existingItem.Type = updatedItem.Type.Trim();
+                existingItem.Quantity = Math.Max(1, updatedItem.Quantity);
+            }
+        }
+    }
+
+    private async Task saveSupplyList(SupplyList supplyList)
+    {
+        _context.SupplyLists.Update(supplyList);
+        await _context.SaveChangesAsync();
+    }
+
+    private async Task saveNewSupplyList(SupplyList supplyList, CancellationToken cancellationToken)
+    {
+        _context.SupplyLists.Add(supplyList);
+        await _context.SaveChangesAsync(cancellationToken);
     }
 
     private void resetCurrentSupplyList(SupplyList supplyList)
     {
         supplyList.Items.Clear();
-    }
-
-    private async Task<WeatherConditions> requestWeatherData(
-        double latitude,
-        double longitude,
-        DateTime startDate,
-        DateTime endDate,
-        CancellationToken cancellationToken = default)
-    {
-        var attemptCount = 0;
-
-        while (attemptCount < 3)
-        {
-            try
-            {
-                var weatherBitKey = _configuration["ExternalApis:WeatherBitKey"];
-
-                if (string.IsNullOrWhiteSpace(weatherBitKey))
-                {
-                    return new WeatherConditions(18, 0, "WeatherBit key is missing", 0);
-                }
-
-                var weather = await requestWeatherBitData(
-                    latitude,
-                    longitude,
-                    weatherBitKey,
-                    cancellationToken
-                );
-
-                weather = evaluateWeatherData(weather);
-
-                if (validateWeatherData(weather))
-                {
-                    return weather;
-                }
-            }
-            catch
-            {
-                // Retry until attemptCount reaches 3.
-            }
-
-            attemptCount++;
-        }
-
-        return new WeatherConditions(18, 0, "WeatherBit weather unavailable", 0);
-    }
-
-    private WeatherConditions evaluateWeatherData(WeatherConditions weather)
-    {
-        return weather with
-        {
-            Description = weather.Description.Trim()
-        };
-    }
-    private bool validateWeatherData(WeatherConditions weather)
-    {
-        return weather.AverageTemperatureC > -80 &&
-               weather.AverageTemperatureC < 70 &&
-               weather.PrecipitationMm >= 0 &&
-               weather.UvIndex >= 0;
+        supplyList.WeatherSummary = null;
     }
 
     private async Task<WeatherConditions> requestWeatherBitData(
@@ -505,7 +502,11 @@ public class SupplyListController : ControllerBase
         CancellationToken cancellationToken)
     {
         var weatherBitUrl = _configuration["ExternalApis:WeatherBitUrl"] ?? "https://api.weatherbit.io/v2.0/forecast/daily";
-        var url = $"{weatherBitUrl}?lat={latitude.ToString(CultureInfo.InvariantCulture)}&lon={longitude.ToString(CultureInfo.InvariantCulture)}&key={Uri.EscapeDataString(key)}";
+
+        var url =
+            $"{weatherBitUrl}?lat={latitude.ToString(CultureInfo.InvariantCulture)}" +
+            $"&lon={longitude.ToString(CultureInfo.InvariantCulture)}" +
+            $"&key={Uri.EscapeDataString(key)}";
 
         using var response = await _httpClient.GetAsync(url, cancellationToken);
         response.EnsureSuccessStatusCode();
@@ -525,6 +526,29 @@ public class SupplyListController : ControllerBase
         );
     }
 
+    private string createWeatherSummary(TripConditions tripConditions, bool hasLaundry)
+    {
+        var laundryText = hasLaundry
+            ? "Laundry is available, so clothing quantities are reduced."
+            : "Laundry is not available, so clothing quantities are based on full trip duration.";
+
+        return $"Forecast: {tripConditions.Description}. " +
+               $"Average temperature: {tripConditions.AverageTemperatureC:F1}°C. " +
+               $"Precipitation: {tripConditions.PrecipitationMm:F1} mm. " +
+               $"UV index: {tripConditions.UvIndex:F1}. " +
+               laundryText;
+    }
+
+    private string createClothingReason(TripConditions tripConditions, bool hasLaundry)
+    {
+        if (hasLaundry)
+        {
+            return $"Calculated for {tripConditions.Days} trip days, but reduced because laundry is available.";
+        }
+
+        return $"Calculated for {tripConditions.Days} trip days without laundry.";
+    }
+
     private static Item createItem(string name, string type, int quantity, string? reason = null)
     {
         return new Item
@@ -534,14 +558,6 @@ public class SupplyListController : ControllerBase
             Quantity = quantity,
             Reason = reason
         };
-    }
-
-    private static void adjustFinalQuantities(SupplyList supplyList, TripConditions conditions)
-    {
-        foreach (var item in supplyList.Items.Where(item => item.Type == "Clothing"))
-        {
-            item.Quantity = Math.Max(1, item.Quantity);
-        }
     }
 }
 

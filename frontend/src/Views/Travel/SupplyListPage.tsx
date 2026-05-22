@@ -12,12 +12,30 @@ export const SupplyListPage = () => {
     const requestTripData = () =>
         api.get<Trip[]>('/Trip').then(res => setTrips(res.data));
 
+    const loadSupplyListForTrip = async (selectedTripId: string) => {
+        if (!selectedTripId) {
+            setSupplyList(null);
+            setMessage('');
+            return;
+        }
+
+        try {
+            const res = await api.get<SupplyList>(`/SupplyList/trip/${selectedTripId}`);
+            setSupplyList(res.data);
+            setMessage('Saved supply list loaded.');
+        } catch (error) {
+            console.error(error);
+            setSupplyList(null);
+            setMessage('No saved supply list for this trip yet.');
+        }
+    };
+
     const createSupplyList = async () => {
         if (!tripId) return;
 
         try {
             const res = await api.post<SupplyList>(`/SupplyList/trip/${tripId}`, {
-                hasLaundry: hasLaundry
+                hasLaundry
             });
 
             setSupplyList(res.data);
@@ -47,28 +65,38 @@ export const SupplyListPage = () => {
             setMessage('Could not save supply list.');
         }
     };
-    const loadSupplyListForTrip = async (selectedTripId: string) => {
-        if (!selectedTripId) {
-            setSupplyList(null);
-            return;
-        }
+
+    const regenerateSupplyList = async () => {
+        if (!supplyList?.id) return;
 
         try {
-            const res = await api.get<SupplyList>(`/SupplyList/trip/${selectedTripId}`);
+            const res = await api.post<SupplyList>(
+                `/SupplyList/${supplyList.id}/regenerate`,
+                { hasLaundry }
+            );
+
             setSupplyList(res.data);
-            setMessage('Saved supply list loaded.');
+            setMessage('Supply list regenerated.');
         } catch (error) {
             console.error(error);
-            setSupplyList(null);
-            setMessage('No saved supply list for this trip yet.');
+            setMessage('Could not regenerate supply list.');
         }
     };
+
     const resetCurrentSupplyList = async () => {
         if (!supplyList?.id) return;
 
-        const res = await api.post<SupplyList>(`/SupplyList/${supplyList.id}/resetCurrentSupplyList`);
-        setSupplyList(res.data);
-        setMessage('Current supply list reset.');
+        try {
+            const res = await api.post<SupplyList>(
+                `/SupplyList/${supplyList.id}/resetCurrentSupplyList`
+            );
+
+            setSupplyList(res.data);
+            setMessage('Current supply list reset.');
+        } catch (error) {
+            console.error(error);
+            setMessage('Could not reset supply list.');
+        }
     };
 
     const updateItemQuantity = (itemId: number | undefined, value: string) => {
@@ -83,19 +111,7 @@ export const SupplyListPage = () => {
             )
         });
     };
-    const regenerateSupplyList = async () => {
-        if (!supplyList?.id) return;
 
-        const res = await api.post<SupplyList>(
-            `/SupplyList/${supplyList.id}/regenerate`,
-            {
-                hasLaundry: hasLaundry
-            }
-        );
-
-        setSupplyList(res.data);
-        setMessage('Supply list regenerated.');
-    };
     const updateItemName = (itemId: number | undefined, value: string) => {
         if (!supplyList) return;
 
@@ -128,33 +144,46 @@ export const SupplyListPage = () => {
                     </div>
 
                     {supplyList?.weatherSummary && (
-                        <p className="status-line">{supplyList.weatherSummary}</p>
+                        <div className="info-box">
+                            {supplyList.weatherSummary}
+                        </div>
                     )}
+
                     {supplyList && (
-                        <p className="status-line">
+                        <p className="status-line muted">
                             Created: {new Date(supplyList.dateCreated).toLocaleString()}
                         </p>
                     )}
+
                     <div className="data-list dense">
                         {supplyList?.items.map(item => (
-                            <article className="data-card" key={item.id ?? item.name}>
-                                <input
-                                    value={item.name}
-                                    onChange={e => updateItemName(item.id, e.target.value)}
-                                />
+                            <article className="data-card supply-item" key={item.id ?? item.name}>
+                                <div className="supply-item-top">
+                                    <input
+                                        className="item-name-input"
+                                        value={item.name}
+                                        onChange={e => updateItemName(item.id, e.target.value)}
+                                    />
 
-                                <span>{item.type}</span>
+                                    <span className="item-type">{item.type}</span>
+                                </div>
 
-                                <label>Quantity</label>
-                                <input
-                                    type="number"
-                                    min="1"
-                                    value={item.quantity}
-                                    onChange={e => updateItemQuantity(item.id, e.target.value)}
-                                />
+                                <div className="supply-item-bottom">
+                                    <div className="quantity-group">
+                                        <label>Qty</label>
+
+                                        <input
+                                            className="quantity-input"
+                                            type="number"
+                                            min="1"
+                                            value={item.quantity}
+                                            onChange={e => updateItemQuantity(item.id, e.target.value)}
+                                        />
+                                    </div>
+                                </div>
 
                                 {item.reason && (
-                                    <small>{item.reason}</small>
+                                    <small className="item-reason">{item.reason}</small>
                                 )}
                             </article>
                         ))}
@@ -170,41 +199,46 @@ export const SupplyListPage = () => {
                 <section className="panel">
                     <h2>Create supply list</h2>
 
-                    <label>Trip</label>
-                    <select
-                        value={tripId}
-                        onChange={e => {
-                            const selectedTripId = e.target.value;
-                            setTripId(selectedTripId);
-                            loadSupplyListForTrip(selectedTripId);
-                        }}
-                    >
-                        <option value="">Select trip</option>
-                        {trips.map(trip => (
-                            <option key={trip.id} value={trip.id}>
-                                {trip.name}
-                            </option>
-                        ))}
-                    </select>
+                    <div className="form-group">
+                        <label>Trip</label>
 
-                    <label>
+                        <select
+                            value={tripId}
+                            onChange={e => {
+                                const selectedTripId = e.target.value;
+                                setTripId(selectedTripId);
+                                loadSupplyListForTrip(selectedTripId);
+                            }}
+                        >
+                            <option value="">Select trip</option>
+                            {trips.map(trip => (
+                                <option key={trip.id} value={trip.id}>
+                                    {trip.name}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+
+                    <label className="checkbox-row">
                         <input
                             type="checkbox"
                             checked={hasLaundry}
                             onChange={e => setHasLaundry(e.target.checked)}
                         />
-                        Accommodation has laundry
+                        <span>Accommodation has laundry</span>
                     </label>
-                    <button className="btn btn-outline" onClick={regenerateSupplyList}>
-                        Regenerate
-                    </button>
-                    <div className="inline-actions">
+
+                    <div className="supply-actions">
                         <button className="btn btn-primary" onClick={createSupplyList}>
                             Create
                         </button>
 
                         <button className="btn btn-outline" onClick={saveSupplyList}>
                             Save
+                        </button>
+
+                        <button className="btn btn-outline" onClick={regenerateSupplyList}>
+                            Regenerate
                         </button>
 
                         <button className="btn btn-outline" onClick={resetCurrentSupplyList}>
