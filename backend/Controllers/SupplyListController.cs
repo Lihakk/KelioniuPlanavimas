@@ -113,7 +113,7 @@ public class SupplyListController : ControllerBase
     private async Task<SupplyList> requestNewSupplyList(Trip trip, CancellationToken cancellationToken = default)
     {
         var conditions = await determineTripConditions(trip, cancellationToken);
-        var items = createSupplyListByConditions(conditions);
+        var items = createSupplyListByConditions(conditions, trip);
         var supplyList = new SupplyList { TripId = trip.Id };
         supplyList.saveGeneratedSupplyList(items);
         updateSupplyList(supplyList, trip, conditions);
@@ -125,7 +125,7 @@ public class SupplyListController : ControllerBase
         var point = trip.Route?.RoutePoints.FirstOrDefault();
         if (point == null || !double.TryParse(point.Latitude, NumberStyles.Float, CultureInfo.InvariantCulture, out var latitude) || !double.TryParse(point.Longitude, NumberStyles.Float, CultureInfo.InvariantCulture, out var longitude))
         {
-            return new TripConditions(trip.determineTripConditions(), 18, 0, "No weather coordinates");
+            return new TripConditions(trip.determineTripConditions(), 18, 0, "No weather coordinates",0);
         }
 
         var weather = await requestWeatherData(latitude, longitude, trip.StartDate, trip.EndDate, cancellationToken);
@@ -135,7 +135,7 @@ public class SupplyListController : ControllerBase
     private TripConditions determineTripConditions(DateTime startDate, DateTime endDate, WeatherConditions weather)
     {
         var days = Math.Max(1, (endDate.Date - startDate.Date).Days + 1);
-        return new TripConditions(days, weather.AverageTemperatureC, weather.PrecipitationMm, weather.Description);
+        return new TripConditions(days, weather.AverageTemperatureC, weather.PrecipitationMm, weather.Description, weather.UvIndex);
     }
 
     private void analyzeTripParameters(Trip trip)
@@ -143,7 +143,7 @@ public class SupplyListController : ControllerBase
         trip.Name = trip.Name.Trim();
     }
 
-    private List<Item> createSupplyListByConditions(TripConditions conditions)
+    private List<Item> createSupplyListByConditions(TripConditions conditions, Trip trip)
     {
         var items = new List<Item>
         {
@@ -165,9 +165,42 @@ public class SupplyListController : ControllerBase
 
         if (conditions.AverageTemperatureC > 22)
         {
+            items.Add(createItem("Hat", "Health", 1));
+        }
+        if (conditions.UvIndex > 5)
+        {
             items.Add(createItem("Sunscreen", "Health", 1));
         }
+        var routeText = string.Join(" ", trip.Route?.RoutePoints.Select(p =>
+            $"{p.Name} {p.City}") ?? []);
 
+        var hasWaterPoi =
+            routeText.Contains("lake", StringComparison.OrdinalIgnoreCase) ||
+            routeText.Contains("sea", StringComparison.OrdinalIgnoreCase) ||
+            routeText.Contains("beach", StringComparison.OrdinalIgnoreCase) ||
+            routeText.Contains("river", StringComparison.OrdinalIgnoreCase) ||
+            routeText.Contains("ežer", StringComparison.OrdinalIgnoreCase) ||
+            routeText.Contains("jūr", StringComparison.OrdinalIgnoreCase) ||
+            routeText.Contains("paplūdim", StringComparison.OrdinalIgnoreCase);
+
+        var hasNaturePoi =
+            routeText.Contains("park", StringComparison.OrdinalIgnoreCase) ||
+            routeText.Contains("forest", StringComparison.OrdinalIgnoreCase) ||
+            routeText.Contains("trail", StringComparison.OrdinalIgnoreCase) ||
+            routeText.Contains("mišk", StringComparison.OrdinalIgnoreCase) ||
+            routeText.Contains("gamt", StringComparison.OrdinalIgnoreCase) ||
+            routeText.Contains("pažint", StringComparison.OrdinalIgnoreCase);
+
+        if (hasWaterPoi)
+        {
+            items.Add(createItem("Swimsuit", "Activity", 1));
+            items.Add(createItem("Towel", "Activity", 1));
+        }
+
+        if (hasNaturePoi)
+        {
+            items.Add(createItem("Insect repellent", "Health", 1));
+        }
         return items;
     }
 
@@ -240,7 +273,8 @@ public class SupplyListController : ControllerBase
         return new WeatherConditions(
             data.Average(item => item.GetProperty("temp").GetDouble()),
             data.Sum(item => item.TryGetProperty("precip", out var precip) ? precip.GetDouble() : 0),
-            data.FirstOrDefault().TryGetProperty("weather", out var weather) ? weather.GetProperty("description").GetString() ?? "WeatherBit forecast" : "WeatherBit forecast");
+            data.FirstOrDefault().TryGetProperty("weather", out var weather) ? weather.GetProperty("description").GetString() ?? "WeatherBit forecast" : "WeatherBit forecast",
+            data.Average(item => item.TryGetProperty("uv", out var uv) ? uv.GetDouble() : 0));
     }
 
     private async Task<WeatherConditions> requestOpenMeteoData(double latitude, double longitude, DateTime startDate, DateTime endDate, CancellationToken cancellationToken)
@@ -258,7 +292,7 @@ public class SupplyListController : ControllerBase
         var min = daily.GetProperty("temperature_2m_min").EnumerateArray().Select(item => item.GetDouble()).ToList();
         var precipitation = daily.GetProperty("precipitation_sum").EnumerateArray().Sum(item => item.GetDouble());
 
-        return new WeatherConditions((max.Average() + min.Average()) / 2, precipitation, "Open-Meteo forecast");
+        return new WeatherConditions((max.Average() + min.Average()) / 2, precipitation, "Open-Meteo forecast", 0);
     }
 
     private static Item createItem(string name, string type, int quantity)
@@ -275,4 +309,5 @@ public class SupplyListController : ControllerBase
     }
 }
 
-public record TripConditions(int Days, double AverageTemperatureC, double PrecipitationMm, string Description);
+public record TripConditions(int Days, double AverageTemperatureC, double PrecipitationMm, string Description, double UvIndex);
+

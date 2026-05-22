@@ -213,7 +213,8 @@ public class ReviewController : ControllerBase
         return new WeatherConditions(
             data.Average(item => item.GetProperty("temp").GetDouble()),
             data.Sum(item => item.TryGetProperty("precip", out var precip) ? precip.GetDouble() : 0),
-            data.FirstOrDefault().TryGetProperty("weather", out var weather) ? weather.GetProperty("description").GetString() ?? "WeatherBit forecast" : "WeatherBit forecast");
+            data.FirstOrDefault().TryGetProperty("weather", out var weather) ? weather.GetProperty("description").GetString() ?? "WeatherBit forecast" : "WeatherBit forecast",
+            data.Average(item => item.TryGetProperty("uv", out var uv) ? uv.GetDouble() : 0));
     }
 
     private async Task<WeatherConditions> requestOpenMeteoData(double latitude, double longitude, DateTime startDate, DateTime endDate, CancellationToken cancellationToken)
@@ -231,7 +232,7 @@ public class ReviewController : ControllerBase
         var min = daily.GetProperty("temperature_2m_min").EnumerateArray().Select(item => item.GetDouble()).ToList();
         var precipitation = daily.GetProperty("precipitation_sum").EnumerateArray().Sum(item => item.GetDouble());
 
-        return new WeatherConditions((max.Average() + min.Average()) / 2, precipitation, "Open-Meteo forecast");
+        return new WeatherConditions((max.Average() + min.Average()) / 2, precipitation, "Open-Meteo forecast",0);
     }
 }
 
@@ -250,4 +251,4 @@ public class TripRecommendation
     public string Reason { get; set; } = string.Empty;
 }
 
-public record WeatherConditions(double AverageTemperatureC, double PrecipitationMm, string Description);
+public record WeatherConditions(double AverageTemperatureC, double PrecipitationMm, string Description, double UvIndex);
