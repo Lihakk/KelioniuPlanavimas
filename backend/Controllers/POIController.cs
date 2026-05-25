@@ -97,6 +97,31 @@ public class POIController : ControllerBase
     [HttpPost("sendRouteData")]
     public async Task<ActionResult<IEnumerable<PointOfInterest>>> sendRouteData([FromBody] RouteSearchRequest request, CancellationToken cancellationToken)
     {
+        if (!string.IsNullOrWhiteSpace(request.StartingCity) && !string.IsNullOrWhiteSpace(request.EndCity))
+        {
+            try
+            {
+                var routeParts = await separateParts(request, cancellationToken);
+                var routePlaces = await sendRoutePlaces(routeParts, cancellationToken);
+                var filtered = filterPOI(routePlaces, request.Type).Take(5).ToList();
+                await savePOI(filtered, cancellationToken);
+
+                return filtered;
+            }
+            catch (HttpRequestException ex)
+            {
+                return StatusCode(StatusCodes.Status502BadGateway, $"External map API failed: {ex.Message}");
+            }
+            catch (TaskCanceledException)
+            {
+                return new List<PointOfInterest>();
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(ex.Message);
+            }
+        }
+
         if (!string.IsNullOrWhiteSpace(request.City))
         {
             try
@@ -135,6 +160,60 @@ public class POIController : ControllerBase
         }
 
         return await _context.PointsOfInterest.ToListAsync();
+    }
+
+    private async Task<CheckedCities> separateParts(RouteSearchRequest request, CancellationToken cancellationToken)
+    {
+        var start = await checkCities(request.StartingCity, cancellationToken);
+        var end = await checkCities(request.EndCity, cancellationToken);
+        return new CheckedCities(start, end);
+    }
+
+    private async Task<List<PointOfInterest>> sendRoutePlaces(CheckedCities routeParts, CancellationToken cancellationToken)
+    {
+        var midpoint = new GeoPoint(
+            "Route midpoint",
+            (routeParts.Start.Latitude + routeParts.End.Latitude) / 2d,
+            (routeParts.Start.Longitude + routeParts.End.Longitude) / 2d);
+
+        var routePlaces = new List<PointOfInterest>();
+        routePlaces.AddRange(await getOSMData(routeParts.Start, cancellationToken));
+        routePlaces.AddRange(await getOSMData(midpoint, cancellationToken));
+        routePlaces.AddRange(await getOSMData(routeParts.End, cancellationToken));
+
+        return routePlaces;
+    }
+
+    private List<PointOfInterest> filterPOI(List<PointOfInterest> poi, string type)
+    {
+        var filtered = cleanRoadData(poi);
+        if (!string.IsNullOrWhiteSpace(type))
+        {
+            filtered = filtered
+                .Where(item => item.Type.Contains(type, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
+
+        return filtered;
+    }
+
+    private async Task savePOI(List<PointOfInterest> poi, CancellationToken cancellationToken)
+    {
+        foreach (var item in poi)
+        {
+            var exists = await _context.PointsOfInterest.AnyAsync(existing =>
+                existing.Name == item.Name
+                && existing.Latitude == item.Latitude
+                && existing.Longitude == item.Longitude,
+                cancellationToken);
+
+            if (!exists && checkPOI(item))
+            {
+                _context.PointsOfInterest.Add(item);
+            }
+        }
+
+        await _context.SaveChangesAsync(cancellationToken);
     }
 
     private bool checkPOI(PointOfInterest poi)
@@ -369,4 +448,6 @@ public class RouteSearchRequest
 {
     public string City { get; set; } = string.Empty;
     public string Type { get; set; } = string.Empty;
+    public string StartingCity { get; set; } = string.Empty;
+    public string EndCity { get; set; } = string.Empty;
 }

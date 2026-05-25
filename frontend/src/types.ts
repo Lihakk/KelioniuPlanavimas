@@ -72,6 +72,14 @@ export interface Payment {
     paymentStatus: PaymentStatus;
 }
 
+export interface PaymentPageResponse {
+    paymentId: number;
+    amount: number;
+    reservationId?: number;
+    paymentPage: string;
+    message: string;
+}
+
 export interface Review {
     id?: number;
     tripId?: number;
@@ -130,4 +138,19 @@ export interface RecommendationPreferences {
     budget: number;
     weatherPreference: string;
 }
+
+export type TravelType =
+    | 'Beach / Sea'
+    | 'Mountains / Hiking'
+    | 'City / Culture'
+    | 'Nature / Wildlife'
+    | 'Skiing / Winter sports'
+    | 'Cruise';
+
+export type WeatherPreferenceOption =
+    | 'Hot and sunny'
+    | 'Warm with some cloud'
+    | 'Mild / Spring-like'
+    | 'Cold / Winter atmosphere'
+    | 'No preference';
 

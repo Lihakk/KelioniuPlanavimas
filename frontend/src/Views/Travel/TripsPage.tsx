@@ -19,6 +19,9 @@ export const TripsPage = () => {
     const [isLoadingOffers, setIsLoadingOffers] = useState(false);
     const [message, setMessage] = useState('');
     const [serviceView, setServiceView] = useState<'accommodation' | 'flight' | 'car'>('accommodation');
+    const [viewTrip, setViewTrip] = useState<Trip | null>(null);
+    const [editingTrip, setEditingTrip] = useState<Trip | null>(null);
+    const [deleteCandidate, setDeleteCandidate] = useState<Trip | null>(null);
 
     const selectedRoute = useMemo(
         () => routes.find(route => String(route.id) === routeId) ?? null,
@@ -29,6 +32,11 @@ export const TripsPage = () => {
         () => trips.find(trip => String(trip.id) === activeTripId) ?? null,
         [trips, activeTripId]
     );
+
+    const openTripList = () => api.post('/Trip/openTripList').catch(() => undefined);
+    const openTripListPage = () => api.post('/Trip/openTripListPage').catch(() => undefined);
+    const openTripCreate = () => api.post('/Trip/openTripCreate').catch(() => undefined);
+    const openTripCreatePage = () => api.post('/Trip/openTripCreatePage').catch(() => undefined);
 
     const getTrips = () => api.get<Trip[]>('/Trip')
         .then(res => {
@@ -42,7 +50,7 @@ export const TripsPage = () => {
             setMessage('Trip list is unavailable until the backend database is running.');
         });
 
-    const getRoutes = () => api.get<TravelRoute[]>('/Route')
+    const getRoutes = () => api.get<TravelRoute[]>('/Route/openRoutes')
         .then(res => {
             setRoutes(res.data);
             if (!routeId && res.data[0]?.id) {
@@ -99,6 +107,8 @@ export const TripsPage = () => {
         setIsCreating(true);
         setMessage('');
         try {
+            await openTripCreate();
+            await openTripCreatePage();
             const tripResponse = await api.post<Trip>('/Trip', {
                 name: tripName || selectedRoute.name,
                 tripStatus: 'Planned',
@@ -124,9 +134,39 @@ export const TripsPage = () => {
         }
     };
 
-    const deleteTrip = async (id?: number) => {
-        if (!id) return;
-        await api.delete(`/Trip/${id}`);
+    const openTripView = async (trip: Trip) => {
+        if (!trip.id) return;
+        const response = await api.post<Trip>(`/Trip/${trip.id}/openTripPage`);
+        setViewTrip(response.data);
+    };
+
+    const openTripEdit = async (trip: Trip) => {
+        if (!trip.id) return;
+        const response = await api.post<Trip>(`/Trip/${trip.id}/openTripEditPage`);
+        setEditingTrip(response.data);
+    };
+
+    const saveTripEdit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!editingTrip?.id) return;
+
+        const payload = { ...editingTrip, route: undefined };
+        await api.put(`/Trip/${editingTrip.id}`, payload);
+        setEditingTrip(null);
+        setMessage('Trip edit saved.');
+        await getTrips();
+    };
+
+    const requestDeleteTrip = async (trip: Trip) => {
+        if (!trip.id) return;
+        await api.post(`/Trip/${trip.id}/deleteConfirmation`).catch(() => undefined);
+        setDeleteCandidate(trip);
+    };
+
+    const confirmDeleteTrip = async () => {
+        if (!deleteCandidate?.id) return;
+        await api.delete(`/Trip/${deleteCandidate.id}`);
+        setDeleteCandidate(null);
         await getTrips();
     };
 
@@ -142,6 +182,8 @@ export const TripsPage = () => {
     };
 
     useEffect(() => {
+        openTripList();
+        openTripListPage();
         getRoutes();
         getTrips();
     }, []);
@@ -269,14 +311,93 @@ export const TripsPage = () => {
                                 )}
                             </div>
                             <div className="inline-actions">
+                                <button className="btn btn-outline" onClick={() => openTripView(trip)}>View</button>
+                                <button className="btn btn-outline" onClick={() => openTripEdit(trip)}>Edit</button>
                                 <button className="btn btn-outline" onClick={() => setActiveTripId(String(trip.id))}>Select</button>
-                                <button className="btn btn-danger" onClick={() => deleteTrip(trip.id)}>Delete</button>
+                                <button className="btn btn-danger" onClick={() => requestDeleteTrip(trip)}>Delete</button>
                             </div>
                         </article>
                     ))}
                     {trips.length === 0 && <div className="empty-state">No saved trips yet. Select a route and create one.</div>}
                 </div>
             </section>
+
+            {viewTrip && (
+                <div className="modal-backdrop modal-backdrop-front" role="dialog" aria-modal="true" aria-label="TripView">
+                    <section className="success-modal trip-modal">
+                        <div className="modal-head">
+                            <div>
+                                <span className="eyebrow">TripView</span>
+                                <h2>{viewTrip.name}</h2>
+                            </div>
+                            <button className="modal-close" onClick={() => setViewTrip(null)} aria-label="Close trip view">x</button>
+                        </div>
+                        <div className="selection-summary">
+                            <span>{viewTrip.startDate?.slice(0, 10)} - {viewTrip.endDate?.slice(0, 10)}</span>
+                            <span>Status: {viewTrip.tripStatus}</span>
+                            <span>Route: {viewTrip.route?.name || viewTrip.routeId || 'Not selected'}</span>
+                            <span>Hotel: {viewTrip.selectedAccommodation || 'Not selected'}</span>
+                            <span>Flight: {viewTrip.selectedFlight || 'Not selected'}</span>
+                            <span>Car: {viewTrip.selectedCar || 'Not selected'}</span>
+                        </div>
+                        <div className="modal-actions">
+                            <button className="btn btn-outline" onClick={() => setViewTrip(null)}>Close</button>
+                            <button className="btn btn-primary" onClick={() => {
+                                setViewTrip(null);
+                                openTripEdit(viewTrip);
+                            }}>Edit trip</button>
+                        </div>
+                    </section>
+                </div>
+            )}
+
+            {editingTrip && (
+                <div className="modal-backdrop modal-backdrop-front" role="dialog" aria-modal="true" aria-label="TripEdit">
+                    <section className="success-modal trip-modal">
+                        <div className="modal-head">
+                            <div>
+                                <span className="eyebrow">TripEdit</span>
+                                <h2>Edit trip</h2>
+                            </div>
+                            <button className="modal-close" onClick={() => setEditingTrip(null)} aria-label="Close trip edit">x</button>
+                        </div>
+                        <form onSubmit={saveTripEdit}>
+                            <label>Trip name</label>
+                            <input value={editingTrip.name} onChange={e => setEditingTrip({ ...editingTrip, name: e.target.value })} required />
+
+                            <label>Start date</label>
+                            <input type="date" value={editingTrip.startDate?.slice(0, 10)} onChange={e => setEditingTrip({ ...editingTrip, startDate: e.target.value })} required />
+
+                            <label>End date</label>
+                            <input type="date" value={editingTrip.endDate?.slice(0, 10)} onChange={e => setEditingTrip({ ...editingTrip, endDate: e.target.value })} required />
+
+                            <label>Status</label>
+                            <select value={editingTrip.tripStatus} onChange={e => setEditingTrip({ ...editingTrip, tripStatus: e.target.value as Trip['tripStatus'] })}>
+                                <option value="Planned">Planned</option>
+                                <option value="Confirmed">Confirmed</option>
+                                <option value="Completed">Completed</option>
+                                <option value="Cancelled">Cancelled</option>
+                            </select>
+
+                            <button className="btn btn-primary" type="submit">Save trip</button>
+                        </form>
+                    </section>
+                </div>
+            )}
+
+            {deleteCandidate && (
+                <div className="modal-backdrop modal-backdrop-front" role="dialog" aria-modal="true" aria-label="Trip delete confirmation">
+                    <section className="success-modal">
+                        <span className="eyebrow">Delete confirmation</span>
+                        <h2>Delete trip?</h2>
+                        <p>{deleteCandidate.name}</p>
+                        <div className="modal-actions">
+                            <button className="btn btn-outline" onClick={() => setDeleteCandidate(null)}>Cancel</button>
+                            <button className="btn btn-danger" onClick={confirmDeleteTrip}>Delete</button>
+                        </div>
+                    </section>
+                </div>
+            )}
         </div>
     );
 };

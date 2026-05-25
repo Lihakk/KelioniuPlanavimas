@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import api from '../../api/api';
-import type { Payment, Reservation, ReservationType, Trip } from '../../types';
+import type { Payment, PaymentPageResponse, Reservation, ReservationType, Trip } from '../../types';
 
 export const PaymentsPage = () => {
     const [trips, setTrips] = useState<Trip[]>([]);
@@ -11,6 +11,10 @@ export const PaymentsPage = () => {
     const [description, setDescription] = useState('');
     const [amount, setAmount] = useState(0);
     const [message, setMessage] = useState('');
+    const [paymentPage, setPaymentPage] = useState<PaymentPageResponse | null>(null);
+
+    const openTripPayment = () => api.post('/Payment/openTripPayment').catch(() => undefined);
+    const openTripPayments = () => api.post('/Payment/openTripPayments').catch(() => undefined);
 
     const getPayments = () => api.get<Payment[]>('/Payment')
         .then(res => setPayments(res.data))
@@ -74,8 +78,10 @@ export const PaymentsPage = () => {
 
     const processPayment = async (id?: number) => {
         if (!id) return;
+        const pageResponse = await api.post<PaymentPageResponse>(`/Payment/${id}/requestPaymentPage`);
+        setPaymentPage(pageResponse.data);
         await api.post(`/Payment/${id}/processPayment`);
-        setMessage('Payment completed.');
+        setMessage(`${pageResponse.data.message}. Payment completed.`);
         await getPayments();
     };
 
@@ -87,6 +93,8 @@ export const PaymentsPage = () => {
     };
 
     useEffect(() => {
+        openTripPayment();
+        openTripPayments();
         getTrips();
         getPayments();
     }, []);
@@ -143,6 +151,13 @@ export const PaymentsPage = () => {
                         <button className="btn btn-primary" type="submit">Request payment</button>
                     </form>
                     {message && <p className="status-line">{message}</p>}
+                    {paymentPage && (
+                        <div className="payment-page-preview">
+                            <span className="eyebrow">BankingBoundary</span>
+                            <strong>{paymentPage.amount} EUR</strong>
+                            <span>{paymentPage.paymentPage}</span>
+                        </div>
+                    )}
 
                     <div className="section-title stacked">
                         <h3>Trip reservations</h3>

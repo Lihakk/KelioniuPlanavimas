@@ -20,6 +20,18 @@ public class PaymentController : ControllerBase
         _configuration = configuration;
     }
 
+    [HttpPost("openTripPayment")]
+    public ActionResult<object> openTripPayment()
+    {
+        return new { message = "TripPayments opened" };
+    }
+
+    [HttpPost("openTripPayments")]
+    public ActionResult<object> openTripPayments()
+    {
+        return new { message = "TripPayments opened" };
+    }
+
     [HttpGet("trip/{tripId}/reservations")]
     public async Task<ActionResult<IEnumerable<Reservation>>> getTripReservations(int tripId)
     {
@@ -63,7 +75,7 @@ public class PaymentController : ControllerBase
     [HttpPost]
     public async Task<ActionResult<Payment>> savePayment(Payment payment)
     {
-        payment.savePaymentData();
+        savePaymentData(payment);
         _context.Payments.Add(payment);
         await _context.SaveChangesAsync();
 
@@ -114,6 +126,18 @@ public class PaymentController : ControllerBase
         return await processPayment(id, cancellationToken);
     }
 
+    [HttpPost("{id}/requestPaymentPage")]
+    public async Task<ActionResult<PaymentPageResponse>> requestPaymentPage(int id, CancellationToken cancellationToken)
+    {
+        var payment = await _context.Payments.Include(item => item.Reservation).FirstOrDefaultAsync(item => item.Id == id, cancellationToken);
+        if (payment == null)
+        {
+            return NotFound();
+        }
+
+        return await requestPaymentPage(payment, cancellationToken);
+    }
+
     [HttpPost("{id}/processPayment")]
     public async Task<IActionResult> processPayment(int id, CancellationToken cancellationToken)
     {
@@ -160,6 +184,31 @@ public class PaymentController : ControllerBase
         return Ok(new { message = result.Message, payment.PaymentStatus });
     }
 
+    private void savePaymentData(Payment payment)
+    {
+        payment.savePaymentData();
+    }
+
+    private Task<PaymentPageResponse> requestPaymentPage(Payment payment, CancellationToken cancellationToken = default)
+    {
+        return getPaymentPage(payment, cancellationToken);
+    }
+
+    private Task<PaymentPageResponse> getPaymentPage(Payment payment, CancellationToken cancellationToken = default)
+    {
+        var bankUrl = _configuration["ExternalApis:BankingUrl"];
+        var paymentPage = string.IsNullOrWhiteSpace(bankUrl)
+            ? "local-banking-adapter://payment"
+            : $"{bankUrl.TrimEnd('/')}/payment-page/{payment.Id}";
+
+        return Task.FromResult(new PaymentPageResponse(
+            payment.Id,
+            payment.Amount,
+            payment.ReservationId,
+            paymentPage,
+            "Payment page data prepared"));
+    }
+
     private async Task<PaymentProcessResult> requestPayment(Payment payment, CancellationToken cancellationToken = default)
     {
         return await processPayment(payment, "payment", cancellationToken);
@@ -197,3 +246,5 @@ public class PaymentController : ControllerBase
 }
 
 public record PaymentProcessResult(bool Success, string Message);
+
+public record PaymentPageResponse(int PaymentId, decimal Amount, int? ReservationId, string PaymentPage, string Message);

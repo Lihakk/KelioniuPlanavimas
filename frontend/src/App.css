@@ -1308,6 +1308,123 @@ textarea:focus {
   gap: 0.5rem;
 }
 
+.route-list-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(24, 34, 48, 0.58);
+}
+
+.modal-backdrop-front {
+  z-index: 2100;
+}
+
+.route-create-modal,
+.route-preview-modal,
+.success-modal {
+  width: min(1240px, 100%);
+  max-height: calc(100vh - 2rem);
+  overflow: auto;
+  background: #ffffff;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  box-shadow: 0 24px 70px rgba(24, 34, 48, 0.28);
+  padding: 1rem;
+}
+
+.route-preview-modal {
+  width: min(980px, 100%);
+}
+
+.route-view-modal {
+  width: min(1040px, 100%);
+}
+
+.success-modal {
+  width: min(420px, 100%);
+}
+
+.trip-modal {
+  width: min(560px, 100%);
+  text-align: left;
+}
+
+.trip-modal form {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.modal-head,
+.modal-actions,
+.preview-stats {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.modal-head h2,
+.success-modal h2 {
+  margin: 0.1rem 0 0;
+}
+
+.modal-close {
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: #ffffff;
+  color: var(--ink);
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.preview-stats {
+  justify-content: flex-start;
+}
+
+.preview-stats span,
+.preview-stats strong {
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fbfdff;
+}
+
+.preview-stats strong {
+  color: var(--primary);
+}
+
+.route-create-lower {
+  grid-template-columns: 1fr;
+}
+
+.payment-page-preview {
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 1rem;
+  padding: 0.85rem;
+  border: 1px solid rgba(37, 99, 235, 0.2);
+  border-radius: 8px;
+  background: #eff6ff;
+  color: #1e3a8a;
+}
+
+.payment-page-preview span:last-child {
+  overflow-wrap: anywhere;
+}
+
 .trip-selection-layout {
   display: grid;
   grid-template-columns: minmax(320px, 0.45fr) minmax(280px, 0.55fr);

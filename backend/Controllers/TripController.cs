@@ -29,6 +29,18 @@ public class TripController : ControllerBase
         return await getTripsData();
     }
 
+    [HttpPost("openTripList")]
+    public ActionResult<object> openTripList()
+    {
+        return new { message = "TripList opened" };
+    }
+
+    [HttpPost("openTripListPage")]
+    public ActionResult<object> openTripListPage()
+    {
+        return new { message = "TripList page opened" };
+    }
+
     [HttpGet("getTripsData")]
     public async Task<ActionResult<IEnumerable<Trip>>> getTripsData()
     {
@@ -37,6 +49,30 @@ public class TripController : ControllerBase
 
     [HttpGet("{id}")]
     public async Task<ActionResult<Trip>> getTrip(int id)
+    {
+        return await getTripData(id);
+    }
+
+    [HttpPost("{id}/openTrip")]
+    public async Task<ActionResult<Trip>> openTrip(int id)
+    {
+        return await getTripData(id);
+    }
+
+    [HttpPost("{id}/openTripPage")]
+    public async Task<ActionResult<Trip>> openTripPage(int id)
+    {
+        return await getTripData(id);
+    }
+
+    [HttpPost("{id}/openTripEdit")]
+    public async Task<ActionResult<Trip>> openTripEdit(int id)
+    {
+        return await getTripData(id);
+    }
+
+    [HttpPost("{id}/openTripEditPage")]
+    public async Task<ActionResult<Trip>> openTripEditPage(int id)
     {
         return await getTripData(id);
     }
@@ -57,6 +93,12 @@ public class TripController : ControllerBase
     public ActionResult<object> openTripCreate()
     {
         return new { message = "TripCreate opened" };
+    }
+
+    [HttpPost("openTripCreatePage")]
+    public ActionResult<object> openTripCreatePage()
+    {
+        return new { message = "TripCreate page opened" };
     }
 
     [HttpPost]
@@ -106,6 +148,18 @@ public class TripController : ControllerBase
         await _context.SaveChangesAsync();
 
         return Ok(new { message = "removal status information", id });
+    }
+
+    [HttpPost("{id}/deleteConfirmation")]
+    public async Task<ActionResult<object>> deleteConfirmation(int id)
+    {
+        var trip = await _context.Trips.FindAsync(id);
+        if (trip == null)
+        {
+            return NotFound();
+        }
+
+        return new { message = "delete confirmation modal", trip.Id, trip.Name };
     }
 
     [HttpPost("{tripId}/route/{routeId}")]

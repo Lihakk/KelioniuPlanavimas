@@ -21,7 +21,7 @@ public class RouteController : ControllerBase
         _httpClient = httpClientFactory.CreateClient();
         _configuration = configuration;
         _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("KelionesRoutePlanner/1.0");
-        _httpClient.Timeout = TimeSpan.FromSeconds(2);
+        _httpClient.Timeout = TimeSpan.FromSeconds(10);
     }
 
     [HttpGet]
@@ -32,6 +32,12 @@ public class RouteController : ControllerBase
 
     [HttpGet("showRouteList")]
     public async Task<ActionResult<IEnumerable<TripRoute>>> showRouteList()
+    {
+        return await getAllRoutes();
+    }
+
+    [HttpGet("openRoutes")]
+    public async Task<ActionResult<IEnumerable<TripRoute>>> openRoutes()
     {
         return await getAllRoutes();
     }
@@ -47,6 +53,18 @@ public class RouteController : ControllerBase
 
     [HttpGet("{id}")]
     public async Task<ActionResult<TripRoute>> getRoute(int id)
+    {
+        return await getSpecificRoute(id);
+    }
+
+    [HttpGet("openRouteView/{id}")]
+    public async Task<ActionResult<TripRoute>> openRouteView(int id)
+    {
+        return await getSpecificRoute(id);
+    }
+
+    [HttpGet("openRouteEdit/{id}")]
+    public async Task<ActionResult<TripRoute>> openRouteEdit(int id)
     {
         return await getSpecificRoute(id);
     }
@@ -67,10 +85,56 @@ public class RouteController : ControllerBase
         return route;
     }
 
+    [HttpGet("{id}/getRoutePOI")]
+    public async Task<ActionResult<IEnumerable<RoutePoint>>> getRoutePOI(int id)
+    {
+        var route = await _context.Routes
+            .Include(item => item.RoutePoints.OrderBy(point => point.Order))
+            .FirstOrDefaultAsync(item => item.Id == id);
+
+        if (route == null)
+        {
+            return NotFound();
+        }
+
+        return route.RoutePoints.OrderBy(point => point.Order).ToList();
+    }
+
     [HttpPost("openRouteCreation")]
     public ActionResult<object> openRouteCreation()
     {
         return new { message = "RouteCreate opened" };
+    }
+
+    [HttpPost("preview")]
+    public async Task<ActionResult<TripRoute>> previewRoute(TripRoute route, CancellationToken cancellationToken)
+    {
+        if (!checkRoute(route))
+        {
+            return BadRequest("Route data is not valid.");
+        }
+
+        try
+        {
+            await sendCities(route, cancellationToken);
+        }
+        catch (HttpRequestException ex)
+        {
+            return StatusCode(StatusCodes.Status502BadGateway, $"External map API failed: {ex.Message}");
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ex.Message);
+        }
+
+        route.Id = 0;
+        foreach (var routePoint in route.RoutePoints)
+        {
+            routePoint.Id = 0;
+            routePoint.RouteId = 0;
+        }
+
+        return route;
     }
 
     [HttpPost]
@@ -83,7 +147,15 @@ public class RouteController : ControllerBase
 
         try
         {
-            await sendCities(route, cancellationToken);
+            if (hasCalculatedRouteData(route))
+            {
+                cleanConfirmedRouteData(route);
+            }
+            else
+            {
+                await sendCities(route, cancellationToken);
+            }
+
             _context.Routes.Add(route);
             await _context.SaveChangesAsync(cancellationToken);
         }
@@ -114,8 +186,45 @@ public class RouteController : ControllerBase
 
         try
         {
-            await sendCities(route, cancellationToken);
-            _context.Entry(route).State = EntityState.Modified;
+            if (hasCalculatedRouteData(route))
+            {
+                cleanConfirmedRouteData(route);
+            }
+            else
+            {
+                await sendCities(route, cancellationToken);
+            }
+
+            var existingRoute = await _context.Routes
+                .Include(item => item.RoutePoints)
+                .FirstOrDefaultAsync(item => item.Id == id, cancellationToken);
+
+            if (existingRoute == null)
+            {
+                return NotFound();
+            }
+
+            existingRoute.Name = route.Name;
+            existingRoute.Length = route.Length;
+            existingRoute.StartingCity = route.StartingCity;
+            existingRoute.EndCity = route.EndCity;
+            existingRoute.Polyline = route.Polyline;
+            existingRoute.TravelTime = route.TravelTime;
+
+            _context.RoutePoints.RemoveRange(existingRoute.RoutePoints);
+            existingRoute.RoutePoints = route.RoutePoints
+                .Select((point, index) => new RoutePoint
+                {
+                    RouteId = id,
+                    Name = point.Name,
+                    City = point.City,
+                    Latitude = point.Latitude,
+                    Longitude = point.Longitude,
+                    Order = point.Order > 0 ? point.Order : index + 1,
+                    PointOfInterestId = point.PointOfInterestId
+                })
+                .ToList();
+
             await _context.SaveChangesAsync(cancellationToken);
         }
         catch (HttpRequestException ex)
@@ -236,16 +345,17 @@ public class RouteController : ControllerBase
         route.StartingCity = checkedCities.Start.Name;
         route.EndCity = checkedCities.End.Name;
 
-        var routeObjects = selectObjects(route, checkedCities);
+        var routeObjects = separateParts(route, checkedCities);
         var osmData = await getOSMData(checkedCities, cancellationToken);
         var roadData = cleanRoadData(osmData);
         var selectedPois = selectedPOI(route, roadData);
         var pointsWithPOI = createRouteWithPOI(routeObjects, selectedPois);
         var poiRoads = await findPOIRoads(pointsWithPOI, cancellationToken);
-        var fastestRoad = await SelectFastestRoad(poiRoads, cancellationToken);
+        var fastestRoad = await sendRoute(poiRoads, cancellationToken);
 
-        saveRouteTime(route, fastestRoad);
-        saveRouteData(route, fastestRoad, pointsWithPOI);
+        var routeTime = getRouteTime(fastestRoad);
+        saveRouteTime(route, routeTime);
+        saveRouteData(route, fastestRoad, fastestRoad.Points);
 
         return new RoutePlanningResult(route, selectedPois, fastestRoad);
     }
@@ -268,9 +378,37 @@ public class RouteController : ControllerBase
         return route.checkRoute();
     }
 
+    private bool hasCalculatedRouteData(TripRoute route)
+    {
+        return route.Length > 0
+            && !string.IsNullOrWhiteSpace(route.Polyline)
+            && !string.IsNullOrWhiteSpace(route.TravelTime);
+    }
+
+    private void cleanConfirmedRouteData(TripRoute route)
+    {
+        route.Id = Math.Max(0, route.Id);
+        route.RoutePoints = route.RoutePoints
+            .Select((point, index) => new RoutePoint
+            {
+                Name = point.Name,
+                City = point.City,
+                Latitude = point.Latitude,
+                Longitude = point.Longitude,
+                Order = point.Order > 0 ? point.Order : index + 1,
+                PointOfInterestId = point.PointOfInterestId
+            })
+            .ToList();
+    }
+
     private bool checkPOI(PointOfInterest poi)
     {
         return poi.checkPOI();
+    }
+
+    private List<RoutePlanningPoint> separateParts(TripRoute route, CheckedCities cities)
+    {
+        return selectObjects(route, cities);
     }
 
     private List<RoutePlanningPoint> selectObjects(TripRoute route, CheckedCities cities)
@@ -364,13 +502,14 @@ public class RouteController : ControllerBase
     private List<RoutePlanningPoint> createRouteWithPOI(List<RoutePlanningPoint> routeObjects, List<PointOfInterest> selectedPoi)
     {
         var points = new List<RoutePlanningPoint> { routeObjects.First() };
-        if (selectedPoi.Count > 0)
+        var explicitRouteObjects = routeObjects.Skip(1).Take(Math.Max(0, routeObjects.Count - 2)).ToList();
+        if (explicitRouteObjects.Count > 0)
+        {
+            points.AddRange(explicitRouteObjects);
+        }
+        else if (selectedPoi.Count > 0)
         {
             points.AddRange(selectedPoi.Select(poi => new RoutePlanningPoint(poi.Name, poi.Address, readCoordinate(poi.Latitude), readCoordinate(poi.Longitude), poi)));
-        }
-        else
-        {
-            points.AddRange(routeObjects.Skip(1).Take(Math.Max(0, routeObjects.Count - 2)));
         }
 
         points.Add(routeObjects.Last());
@@ -388,7 +527,12 @@ public class RouteController : ControllerBase
         var initialRoad = createInitialRoute(graph);
         var road = shuffleObjectOrder(graph, initialRoad);
         var selectedRoad = selectRoad(matrix, road);
-        return await createPolyLine(selectedRoad, cancellationToken);
+        return await createPolyLine(selectedRoad, matrix, cancellationToken);
+    }
+
+    private async Task<RouteRoad> sendRoute(RouteMatrix matrix, CancellationToken cancellationToken = default)
+    {
+        return await SelectFastestRoad(matrix, cancellationToken);
     }
 
     private List<List<double>> createGraph(RouteMatrix matrix)
@@ -398,29 +542,42 @@ public class RouteController : ControllerBase
 
     private async Task<RouteMatrix> createLengthMatrix(List<RoutePlanningPoint> points, CancellationToken cancellationToken = default)
     {
-        var coordinates = string.Join(';', points.Select(point => formatCoordinate(point.Longitude, point.Latitude)));
-        var osrmUrl = _configuration["ExternalApis:OsrmUrl"] ?? "https://router.project-osrm.org";
-        var url = $"{osrmUrl.TrimEnd('/')}/table/v1/driving/{coordinates}?annotations=duration,distance";
-
         try
         {
-            using var response = await _httpClient.GetAsync(url, cancellationToken);
-            response.EnsureSuccessStatusCode();
+            var roadGraph = await readOSMFile(points, cancellationToken);
+            var graphNodes = points.Select(point => findNearestGraphNode(roadGraph, point)).ToList();
+            var distances = new List<List<double>>();
+            var durations = new List<List<double>>();
 
-            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-            using var json = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+            for (var i = 0; i < graphNodes.Count; i++)
+            {
+                var shortestDistances = dijkstraDistances(roadGraph, graphNodes[i]);
+                var distanceRow = new List<double>();
+                var durationRow = new List<double>();
+                for (var j = 0; j < graphNodes.Count; j++)
+                {
+                    var distance = shortestDistances.TryGetValue(graphNodes[j], out var value) ? value : double.NaN;
+                    distanceRow.Add(distance);
+                    durationRow.Add(double.IsNaN(distance) ? double.NaN : distance / 60_000d * 3600d);
+                }
 
-            var durations = readMatrix(json.RootElement, "durations");
-            var distances = readMatrix(json.RootElement, "distances");
+                distances.Add(distanceRow);
+                durations.Add(durationRow);
+            }
+
             saveToLengthMatrix(durations);
 
-            return new RouteMatrix(points, durations, distances);
+            return new RouteMatrix(points, durations, distances, roadGraph, graphNodes);
         }
         catch (HttpRequestException)
         {
             return createFallbackLengthMatrix(points);
         }
         catch (TaskCanceledException)
+        {
+            return createFallbackLengthMatrix(points);
+        }
+        catch (InvalidOperationException)
         {
             return createFallbackLengthMatrix(points);
         }
@@ -468,7 +625,11 @@ public class RouteController : ControllerBase
 
             if (next < 0)
             {
-                break;
+                next = Enumerable.Range(1, graph.Count - 2).FirstOrDefault(index => !visited.Contains(index));
+                if (next == 0)
+                {
+                    break;
+                }
             }
 
             road.Add(next);
@@ -526,30 +687,51 @@ public class RouteController : ControllerBase
         return total;
     }
 
-    private async Task<RouteRoad> createPolyLine(List<RoutePlanningPoint> selectedRoad, CancellationToken cancellationToken = default)
+    private Task<RouteRoad> createPolyLine(List<RoutePlanningPoint> selectedRoad, RouteMatrix matrix, CancellationToken cancellationToken = default)
     {
-        var coordinates = string.Join(';', selectedRoad.Select(point => formatCoordinate(point.Longitude, point.Latitude)));
-        var osrmUrl = _configuration["ExternalApis:OsrmUrl"] ?? "https://router.project-osrm.org";
-        var url = $"{osrmUrl.TrimEnd('/')}/route/v1/driving/{coordinates}?overview=full&geometries=geojson&steps=false";
-
-        try
+        if (matrix.RoadGraph == null || matrix.GraphNodeIds == null)
         {
-            using var response = await _httpClient.GetAsync(url, cancellationToken);
-            response.EnsureSuccessStatusCode();
+            return Task.FromResult(createFallbackPolyLine(selectedRoad));
+        }
 
-            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-            using var json = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        var distance = 0d;
+        var coordinates = new List<string>();
+        for (var i = 0; i < selectedRoad.Count - 1; i++)
+        {
+            var fromIndex = matrix.Points.IndexOf(selectedRoad[i]);
+            var toIndex = matrix.Points.IndexOf(selectedRoad[i + 1]);
+            if (fromIndex < 0 || toIndex < 0)
+            {
+                return Task.FromResult(createFallbackPolyLine(selectedRoad));
+            }
 
-            return checkPolyLine(json.RootElement, selectedRoad);
+            var nodePath = dijkstraPath(matrix.RoadGraph, matrix.GraphNodeIds[fromIndex], matrix.GraphNodeIds[toIndex]);
+            if (nodePath.Count == 0)
+            {
+                return Task.FromResult(createFallbackPolyLine(selectedRoad));
+            }
+
+            for (var n = 0; n < nodePath.Count; n++)
+            {
+                if (coordinates.Count > 0 && n == 0)
+                {
+                    continue;
+                }
+
+                var node = matrix.RoadGraph.Nodes[nodePath[n]];
+                coordinates.Add($"[{node.Longitude.ToString(CultureInfo.InvariantCulture)},{node.Latitude.ToString(CultureInfo.InvariantCulture)}]");
+            }
+
+            distance += calculatePathDistance(matrix.RoadGraph, nodePath);
         }
-        catch (HttpRequestException)
+
+        if (coordinates.Count == 0)
         {
-            return createFallbackPolyLine(selectedRoad);
+            return Task.FromResult(createFallbackPolyLine(selectedRoad));
         }
-        catch (TaskCanceledException)
-        {
-            return createFallbackPolyLine(selectedRoad);
-        }
+
+        var geoJson = $$"""{"type":"LineString","coordinates":[{{string.Join(",", coordinates)}}]}""";
+        return Task.FromResult(new RouteRoad(selectedRoad, distance, distance / 60_000d * 3600d, geoJson));
     }
 
     private RouteRoad checkPolyLine(JsonElement root, List<RoutePlanningPoint> selectedRoad)
@@ -567,9 +749,14 @@ public class RouteController : ControllerBase
         return new RouteRoad(selectedRoad, distance, duration, geometry);
     }
 
-    private void saveRouteTime(TripRoute route, RouteRoad road)
+    private TimeSpan getRouteTime(RouteRoad road)
     {
-        route.TravelTime = TimeSpan.FromSeconds(road.DurationSeconds).ToString(@"hh\:mm", CultureInfo.InvariantCulture);
+        return TimeSpan.FromSeconds(road.DurationSeconds);
+    }
+
+    private void saveRouteTime(TripRoute route, TimeSpan routeTime)
+    {
+        route.TravelTime = routeTime.ToString(@"hh\:mm", CultureInfo.InvariantCulture);
     }
 
     private void saveRouteData(TripRoute route, RouteRoad road, List<RoutePlanningPoint> points)
@@ -639,6 +826,215 @@ public class RouteController : ControllerBase
             );
             out center tags 50;
             """);
+    }
+
+    private async Task<OsmRoadGraph> readOSMFile(List<RoutePlanningPoint> points, CancellationToken cancellationToken)
+    {
+        var overpassUrl = _configuration["ExternalApis:OverpassUrl"] ?? "https://overpass-api.de/api/interpreter";
+        var query = buildRoadGraphQuery(points);
+
+        using var content = new StringContent(query, Encoding.UTF8, "application/x-www-form-urlencoded");
+        using var response = await _httpClient.PostAsync(overpassUrl, content, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var json = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+
+        if (!json.RootElement.TryGetProperty("elements", out var elements))
+        {
+            throw new InvalidOperationException("OSM road data did not include elements.");
+        }
+
+        var graph = separateRoadsAndCrossroads(elements);
+        calculateSegmentLengths(graph);
+        return graph;
+    }
+
+    private static string buildRoadGraphQuery(List<RoutePlanningPoint> points)
+    {
+        var minLatitude = points.Min(point => point.Latitude) - 0.08;
+        var maxLatitude = points.Max(point => point.Latitude) + 0.08;
+        var minLongitude = points.Min(point => point.Longitude) - 0.08;
+        var maxLongitude = points.Max(point => point.Longitude) + 0.08;
+
+        return "data=" + Uri.EscapeDataString($"""
+            [out:json][timeout:25];
+            (
+              way["highway"~"motorway|trunk|primary|secondary|tertiary|unclassified|residential|service|living_street"]({minLatitude.ToString(CultureInfo.InvariantCulture)},{minLongitude.ToString(CultureInfo.InvariantCulture)},{maxLatitude.ToString(CultureInfo.InvariantCulture)},{maxLongitude.ToString(CultureInfo.InvariantCulture)});
+            );
+            (._;>;);
+            out body;
+            """);
+    }
+
+    private static OsmRoadGraph separateRoadsAndCrossroads(JsonElement elements)
+    {
+        var graph = new OsmRoadGraph();
+        var roadWays = new List<List<long>>();
+
+        foreach (var element in elements.EnumerateArray())
+        {
+            var type = readString(element, "type");
+            if (type == "node" && element.TryGetProperty("id", out var id) && element.TryGetProperty("lat", out var lat) && element.TryGetProperty("lon", out var lon))
+            {
+                graph.Nodes[id.GetInt64()] = new RoadGraphNode(id.GetInt64(), lat.GetDouble(), lon.GetDouble());
+            }
+
+            if (type == "way" && element.TryGetProperty("nodes", out var nodes))
+            {
+                var wayNodes = nodes.EnumerateArray().Select(node => node.GetInt64()).ToList();
+                if (wayNodes.Count > 1)
+                {
+                    roadWays.Add(wayNodes);
+                }
+            }
+        }
+
+        foreach (var way in roadWays)
+        {
+            for (var i = 0; i < way.Count - 1; i++)
+            {
+                if (!graph.Nodes.ContainsKey(way[i]) || !graph.Nodes.ContainsKey(way[i + 1]))
+                {
+                    continue;
+                }
+
+                graph.Edges.TryAdd(way[i], new List<RoadGraphEdge>());
+                graph.Edges.TryAdd(way[i + 1], new List<RoadGraphEdge>());
+                graph.Edges[way[i]].Add(new RoadGraphEdge(way[i + 1], 0));
+                graph.Edges[way[i + 1]].Add(new RoadGraphEdge(way[i], 0));
+            }
+        }
+
+        if (graph.Nodes.Count == 0 || graph.Edges.Count == 0)
+        {
+            throw new InvalidOperationException("OSM road graph could not be built.");
+        }
+
+        return graph;
+    }
+
+    private static void calculateSegmentLengths(OsmRoadGraph graph)
+    {
+        foreach (var (fromId, edges) in graph.Edges.ToList())
+        {
+            var from = graph.Nodes[fromId];
+            for (var i = 0; i < edges.Count; i++)
+            {
+                var to = graph.Nodes[edges[i].To];
+                var distance = calculateRoadDistanceMeters(
+                    new RoutePlanningPoint(from.Id.ToString(CultureInfo.InvariantCulture), string.Empty, from.Latitude, from.Longitude),
+                    new RoutePlanningPoint(to.Id.ToString(CultureInfo.InvariantCulture), string.Empty, to.Latitude, to.Longitude));
+                edges[i] = edges[i] with { DistanceMeters = distance };
+            }
+        }
+    }
+
+    private static long findNearestGraphNode(OsmRoadGraph graph, RoutePlanningPoint point)
+    {
+        return graph.Nodes.Values
+            .OrderBy(node => calculateRoadDistanceMeters(
+                point,
+                new RoutePlanningPoint(node.Id.ToString(CultureInfo.InvariantCulture), string.Empty, node.Latitude, node.Longitude)))
+            .First()
+            .Id;
+    }
+
+    private static Dictionary<long, double> dijkstraDistances(OsmRoadGraph graph, long startNode)
+    {
+        var distances = graph.Nodes.Keys.ToDictionary(id => id, _ => double.PositiveInfinity);
+        var queue = new PriorityQueue<long, double>();
+        distances[startNode] = 0;
+        queue.Enqueue(startNode, 0);
+
+        while (queue.TryDequeue(out var current, out var currentDistance))
+        {
+            if (currentDistance > distances[current])
+            {
+                continue;
+            }
+
+            if (!graph.Edges.TryGetValue(current, out var edges))
+            {
+                continue;
+            }
+
+            foreach (var edge in edges)
+            {
+                var candidate = currentDistance + edge.DistanceMeters;
+                if (candidate < distances[edge.To])
+                {
+                    distances[edge.To] = candidate;
+                    queue.Enqueue(edge.To, candidate);
+                }
+            }
+        }
+
+        return distances;
+    }
+
+    private static List<long> dijkstraPath(OsmRoadGraph graph, long startNode, long endNode)
+    {
+        var distances = graph.Nodes.Keys.ToDictionary(id => id, _ => double.PositiveInfinity);
+        var previous = new Dictionary<long, long>();
+        var queue = new PriorityQueue<long, double>();
+        distances[startNode] = 0;
+        queue.Enqueue(startNode, 0);
+
+        while (queue.TryDequeue(out var current, out var currentDistance))
+        {
+            if (current == endNode)
+            {
+                break;
+            }
+
+            if (currentDistance > distances[current] || !graph.Edges.TryGetValue(current, out var edges))
+            {
+                continue;
+            }
+
+            foreach (var edge in edges)
+            {
+                var candidate = currentDistance + edge.DistanceMeters;
+                if (candidate < distances[edge.To])
+                {
+                    distances[edge.To] = candidate;
+                    previous[edge.To] = current;
+                    queue.Enqueue(edge.To, candidate);
+                }
+            }
+        }
+
+        if (double.IsInfinity(distances[endNode]))
+        {
+            return new List<long>();
+        }
+
+        var path = new List<long> { endNode };
+        while (path[^1] != startNode)
+        {
+            path.Add(previous[path[^1]]);
+        }
+
+        path.Reverse();
+        return path;
+    }
+
+    private static double calculatePathDistance(OsmRoadGraph graph, List<long> nodePath)
+    {
+        var total = 0d;
+        for (var i = 0; i < nodePath.Count - 1; i++)
+        {
+            var edge = graph.Edges[nodePath[i]].First(item => item.To == nodePath[i + 1]);
+            total += edge.DistanceMeters;
+        }
+
+        return total;
+    }
+
+    private static string readString(JsonElement element, string property)
+    {
+        return element.TryGetProperty(property, out var value) ? value.GetString() ?? string.Empty : string.Empty;
     }
 
     private static PointOfInterest? readOverpassPOI(JsonElement element)
@@ -908,11 +1304,26 @@ public record CheckedCities(GeoPoint Start, GeoPoint End);
 
 public record RoutePlanningPoint(string Name, string City, double Latitude, double Longitude, PointOfInterest? PointOfInterest = null);
 
-public record RouteMatrix(List<RoutePlanningPoint> Points, List<List<double>> Durations, List<List<double>> Distances);
+public record RouteMatrix(
+    List<RoutePlanningPoint> Points,
+    List<List<double>> Durations,
+    List<List<double>> Distances,
+    OsmRoadGraph? RoadGraph = null,
+    List<long>? GraphNodeIds = null);
 
 public record RouteRoad(List<RoutePlanningPoint> Points, double DistanceMeters, double DurationSeconds, string GeoJson);
 
 public record RoutePlanningResult(TripRoute Route, List<PointOfInterest> ImportedPOI, RouteRoad Road);
+
+public class OsmRoadGraph
+{
+    public Dictionary<long, RoadGraphNode> Nodes { get; } = new();
+    public Dictionary<long, List<RoadGraphEdge>> Edges { get; } = new();
+}
+
+public record RoadGraphNode(long Id, double Latitude, double Longitude);
+
+public record RoadGraphEdge(long To, double DistanceMeters);
 
 public class RoadPoiRequest
 {
