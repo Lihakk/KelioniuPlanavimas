@@ -239,12 +239,19 @@ public class SupplyListController : ControllerBase
 
                 if (string.IsNullOrWhiteSpace(weatherBitKey))
                 {
-                    return new WeatherConditions(18, 0, "Weather data unavailable", 0);
+                    return estimateSeasonalWeather(latitude, startDate);
+                }
+
+                if (isDateTooFarForForecast(startDate))
+                {
+                    return estimateSeasonalWeather(latitude, startDate);
                 }
 
                 var weatherData = await requestWeatherBitData(
                     latitude,
                     longitude,
+                    startDate,
+                    endDate,
                     weatherBitKey,
                     cancellationToken
                 );
@@ -264,7 +271,49 @@ public class SupplyListController : ControllerBase
             attemptCount++;
         }
 
-        return new WeatherConditions(18, 0, "Weather data unavailable", 0);
+        return estimateSeasonalWeather(latitude, startDate);
+    }
+
+    private bool isDateTooFarForForecast(DateTime startDate)
+    {
+        return startDate.Date > DateTime.UtcNow.Date.AddDays(16);
+    }
+
+    private WeatherConditions estimateSeasonalWeather(double latitude, DateTime startDate)
+    {
+        var month = startDate.Month;
+
+        if (month == 12 || month == 1 || month == 2)
+        {
+            if (latitude >= 60)
+            {
+                return new WeatherConditions(-30, 5, "Estimated very cold winter conditions", 0);
+            }
+
+            if (latitude >= 50)
+            {
+                return new WeatherConditions(-10, 5, "Estimated cold winter conditions", 0);
+            }
+
+            return new WeatherConditions(2, 5, "Estimated winter conditions", 1);
+        }
+
+        if (month == 6 || month == 7 || month == 8)
+        {
+            if (latitude >= 60)
+            {
+                return new WeatherConditions(12, 3, "Estimated cool summer conditions", 3);
+            }
+
+            return new WeatherConditions(24, 2, "Estimated warm summer conditions", 6);
+        }
+
+        if (latitude >= 60)
+        {
+            return new WeatherConditions(5, 4, "Estimated cold seasonal conditions", 1);
+        }
+
+        return new WeatherConditions(15, 3, "Estimated moderate seasonal conditions", 3);
     }
 
     private WeatherConditions evaluateWeatherData(WeatherConditions weatherData)
@@ -366,7 +415,7 @@ public class SupplyListController : ControllerBase
             ));
         }
 
-        if (tripConditions.AverageTemperatureC < 10)
+        if (tripConditions.AverageTemperatureC < 15)
         {
             items.Add(createItem(
                 "Warm jacket",
@@ -498,14 +547,20 @@ public class SupplyListController : ControllerBase
     private async Task<WeatherConditions> requestWeatherBitData(
         double latitude,
         double longitude,
+        DateTime startDate,
+        DateTime endDate,
         string key,
         CancellationToken cancellationToken)
     {
-        var weatherBitUrl = _configuration["ExternalApis:WeatherBitUrl"] ?? "https://api.weatherbit.io/v2.0/forecast/daily";
+        var weatherBitUrl = _configuration["ExternalApis:WeatherBitUrl"]
+            ?? "https://api.weatherbit.io/v2.0/forecast/daily";
+
+        var days = Math.Min(16, Math.Max(1, (endDate.Date - startDate.Date).Days + 1));
 
         var url =
             $"{weatherBitUrl}?lat={latitude.ToString(CultureInfo.InvariantCulture)}" +
             $"&lon={longitude.ToString(CultureInfo.InvariantCulture)}" +
+            $"&days={days}" +
             $"&key={Uri.EscapeDataString(key)}";
 
         using var response = await _httpClient.GetAsync(url, cancellationToken);
@@ -516,13 +571,33 @@ public class SupplyListController : ControllerBase
 
         var data = json.RootElement.GetProperty("data").EnumerateArray().ToList();
 
+        var averageMinTemp = data.Average(item =>
+            item.TryGetProperty("min_temp", out var minTemp)
+                ? minTemp.GetDouble()
+                : item.GetProperty("temp").GetDouble()
+        );
+
+        var precipitation = data.Sum(item =>
+            item.TryGetProperty("precip", out var precip)
+                ? precip.GetDouble()
+                : 0
+        );
+
+        var uvIndex = data.Average(item =>
+            item.TryGetProperty("uv", out var uv)
+                ? uv.GetDouble()
+                : 0
+        );
+
+        var description = data.FirstOrDefault().TryGetProperty("weather", out var weather)
+            ? weather.GetProperty("description").GetString() ?? "WeatherBit forecast"
+            : "WeatherBit forecast";
+
         return new WeatherConditions(
-            data.Average(item => item.GetProperty("temp").GetDouble()),
-            data.Sum(item => item.TryGetProperty("precip", out var precip) ? precip.GetDouble() : 0),
-            data.FirstOrDefault().TryGetProperty("weather", out var weather)
-                ? weather.GetProperty("description").GetString() ?? "WeatherBit forecast"
-                : "WeatherBit forecast",
-            data.Average(item => item.TryGetProperty("uv", out var uv) ? uv.GetDouble() : 0)
+            averageMinTemp,
+            precipitation,
+            description,
+            uvIndex
         );
     }
 
