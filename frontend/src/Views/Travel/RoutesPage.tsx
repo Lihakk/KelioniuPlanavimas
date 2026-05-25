@@ -43,7 +43,7 @@ export const RoutesPage = () => {
             setMessage('Route list is unavailable until the backend database is running.');
         });
 
-    const findObjects = async () => {
+    const getNearbyPOI = async () => {
         setIsSearching(true);
         setMessage('');
         setCreatedRoute(null);
@@ -90,7 +90,7 @@ export const RoutesPage = () => {
         };
     };
 
-    const previewCalculatedRoute = async (e: React.FormEvent) => {
+    const sendCities = async (e: React.FormEvent) => {
         e.preventDefault();
         setIsSaving(true);
         setMessage('');
@@ -108,7 +108,7 @@ export const RoutesPage = () => {
         }
     };
 
-    const confirmAndSaveRoute = async () => {
+    const acceptRoute = async () => {
         if (!previewRoute) return;
 
         setIsSaving(true);
@@ -147,14 +147,14 @@ export const RoutesPage = () => {
         await getRoutes();
     };
 
-    const viewSelectedRoute = async (route: TravelRoute) => {
+    const openRouteView = async (route: TravelRoute) => {
         if (!route.id) return;
         const response = await api.get<TravelRoute>(`/Route/openRouteView/${route.id}`);
         setViewRoute(response.data);
         setShowSuccess(false);
     };
 
-    const editRoute = async (route: TravelRoute) => {
+    const openRouteEdit = async (route: TravelRoute) => {
         const response = route.id
             ? await api.get<TravelRoute>(`/Route/openRouteEdit/${route.id}`)
             : { data: route };
@@ -176,7 +176,7 @@ export const RoutesPage = () => {
         ));
     };
 
-    const newRoute = () => {
+    const openRouteCreation = () => {
         setEditingRouteId(null);
         setCreatedRoute(null);
         setPreviewRoute(null);
@@ -186,11 +186,11 @@ export const RoutesPage = () => {
 
     const openRouteCreate = async () => {
         await api.post('/Route/openRouteCreation').catch(() => undefined);
-        newRoute();
+        openRouteCreation();
         setIsCreateOpen(true);
         setViewRoute(null);
         setShowSuccess(false);
-        await findObjects();
+        await getNearbyPOI();
     };
 
     const closeRouteCreate = () => {
@@ -200,7 +200,7 @@ export const RoutesPage = () => {
 
     useEffect(() => {
         getRoutes();
-        findObjects();
+        getNearbyPOI();
     }, []);
 
     return (
@@ -231,8 +231,8 @@ export const RoutesPage = () => {
                                     <span>{route.routePoints?.length ?? 0} selected POIs</span>
                                 </div>
                                 <div className="inline-actions">
-                                    <button className="btn btn-outline" onClick={() => viewSelectedRoute(route)}>View</button>
-                                    <button className="btn btn-outline" onClick={() => editRoute(route)}>Edit</button>
+                                    <button className="btn btn-outline" onClick={() => openRouteView(route)}>View</button>
+                                    <button className="btn btn-outline" onClick={() => openRouteEdit(route)}>Edit</button>
                                     <button className="btn btn-danger" onClick={() => deleteRoute(route.id)}>Delete</button>
                                 </div>
                             </article>
@@ -253,7 +253,7 @@ export const RoutesPage = () => {
                             <button className="modal-close" onClick={closeRouteCreate} aria-label="Close route create">x</button>
                         </div>
 
-                        <form onSubmit={previewCalculatedRoute} className="planner-layout route-page-layout">
+                        <form onSubmit={sendCities} className="planner-layout route-page-layout">
                             <div className="builder-panel">
                                 <label>Starting city</label>
                                 <input value={startCity} onChange={e => setStartCity(e.target.value)} required />
@@ -262,8 +262,8 @@ export const RoutesPage = () => {
                                 <input value={endCity} onChange={e => setEndCity(e.target.value)} required />
 
                                 <div className="route-editor-actions">
-                                    <button className="btn btn-outline" type="button" onClick={newRoute}>New route</button>
-                                    <button className="btn btn-outline" type="button" onClick={findObjects} disabled={isSearching}>
+                                    <button className="btn btn-outline" type="button" onClick={openRouteCreation}>New route</button>
+                                    <button className="btn btn-outline" type="button" onClick={getNearbyPOI} disabled={isSearching}>
                                         {isSearching ? 'Loading POIs...' : 'Reload POIs'}
                                     </button>
                                 </div>
@@ -340,7 +340,7 @@ export const RoutesPage = () => {
                         />
                         <div className="modal-actions">
                             <button className="btn btn-outline" onClick={() => setViewRoute(null)}>Close</button>
-                            <button className="btn btn-primary" onClick={() => editRoute(viewRoute)}>Edit route</button>
+                            <button className="btn btn-primary" onClick={() => openRouteEdit(viewRoute)}>Edit route</button>
                         </div>
                     </section>
                 </div>
@@ -371,7 +371,7 @@ export const RoutesPage = () => {
                         />
                         <div className="modal-actions">
                             <button className="btn btn-outline" onClick={() => setPreviewRoute(null)}>Edit route</button>
-                            <button className="btn btn-primary" onClick={confirmAndSaveRoute} disabled={isSaving}>
+                            <button className="btn btn-primary" onClick={acceptRoute} disabled={isSaving}>
                                 {isSaving ? 'Saving...' : 'Confirm route'}
                             </button>
                         </div>

@@ -2,6 +2,8 @@
 
 Lentele sudaryta pagal pateiktas sekos diagramas. Jei diagramoje nurodytas `Google maps`, kode tai igyvendinta per OSM/Overpass/Nominatim/Leaflet arba lokalus fallback, nes projekte pagrindinis marsruto skaiciavimas remiasi OSM grafu.
 
+Konkrecios kodo eilutes/snippet'ai kiekvienai rodyklei yra faile `docs/diagram-arrow-code-snippets.md`.
+
 ## Sukurti marsruta
 
 | Nr. | Diagramoje rodoma rodykle | Kodo vieta | Atitiktis |

@@ -309,7 +309,7 @@ public class RouteController : ControllerBase
     }
 
     [HttpPost("roadPOI")]
-    public async Task<ActionResult<IEnumerable<PointOfInterest>>> getRoadPOI([FromBody] RoadPoiRequest request, CancellationToken cancellationToken)
+    public async Task<ActionResult<IEnumerable<PointOfInterest>>> getNearbyPOI([FromBody] RoadPoiRequest request, CancellationToken cancellationToken)
     {
         var route = new TripRoute
         {
@@ -350,8 +350,8 @@ public class RouteController : ControllerBase
         var roadData = cleanRoadData(osmData);
         var selectedPois = selectedPOI(route, roadData);
         var pointsWithPOI = createRouteWithPOI(routeObjects, selectedPois);
-        var poiRoads = await findPOIRoads(pointsWithPOI, cancellationToken);
-        var fastestRoad = await sendRoute(poiRoads, cancellationToken);
+        var lengthMatrix = await createLengthMatrix(pointsWithPOI, cancellationToken);
+        var fastestRoad = await sendRoute(lengthMatrix, cancellationToken);
 
         var routeTime = getRouteTime(fastestRoad);
         saveRouteTime(route, routeTime);
@@ -516,23 +516,18 @@ public class RouteController : ControllerBase
         return points;
     }
 
-    private async Task<RouteMatrix> findPOIRoads(List<RoutePlanningPoint> points, CancellationToken cancellationToken = default)
-    {
-        return await createLengthMatrix(points, cancellationToken);
-    }
-
-    private async Task<RouteRoad> SelectFastestRoad(RouteMatrix matrix, CancellationToken cancellationToken = default)
+    private async Task<RouteRoad> selectFastestRoad(RouteMatrix matrix, CancellationToken cancellationToken = default)
     {
         var graph = createGraph(matrix);
         var initialRoad = createInitialRoute(graph);
         var road = shuffleObjectOrder(graph, initialRoad);
         var selectedRoad = selectRoad(matrix, road);
-        return await createPolyLine(selectedRoad, matrix, cancellationToken);
+        return await createPolyline(selectedRoad, matrix, cancellationToken);
     }
 
     private async Task<RouteRoad> sendRoute(RouteMatrix matrix, CancellationToken cancellationToken = default)
     {
-        return await SelectFastestRoad(matrix, cancellationToken);
+        return await selectFastestRoad(matrix, cancellationToken);
     }
 
     private List<List<double>> createGraph(RouteMatrix matrix)
@@ -687,7 +682,7 @@ public class RouteController : ControllerBase
         return total;
     }
 
-    private Task<RouteRoad> createPolyLine(List<RoutePlanningPoint> selectedRoad, RouteMatrix matrix, CancellationToken cancellationToken = default)
+    private Task<RouteRoad> createPolyline(List<RoutePlanningPoint> selectedRoad, RouteMatrix matrix, CancellationToken cancellationToken = default)
     {
         if (matrix.RoadGraph == null || matrix.GraphNodeIds == null)
         {
@@ -732,21 +727,6 @@ public class RouteController : ControllerBase
 
         var geoJson = $$"""{"type":"LineString","coordinates":[{{string.Join(",", coordinates)}}]}""";
         return Task.FromResult(new RouteRoad(selectedRoad, distance, distance / 60_000d * 3600d, geoJson));
-    }
-
-    private RouteRoad checkPolyLine(JsonElement root, List<RoutePlanningPoint> selectedRoad)
-    {
-        if (!root.TryGetProperty("routes", out var routes) || routes.GetArrayLength() == 0)
-        {
-            throw new InvalidOperationException("OSRM did not return a route.");
-        }
-
-        var route = routes[0];
-        var distance = route.GetProperty("distance").GetDouble();
-        var duration = route.GetProperty("duration").GetDouble();
-        var geometry = route.GetProperty("geometry").GetRawText();
-
-        return new RouteRoad(selectedRoad, distance, duration, geometry);
     }
 
     private TimeSpan getRouteTime(RouteRoad road)
@@ -1088,14 +1068,6 @@ public class RouteController : ControllerBase
         return tags.TryGetProperty(name, out var value) ? value.GetString() : null;
     }
 
-    private static List<List<double>> readMatrix(JsonElement root, string property)
-    {
-        return root.GetProperty(property)
-            .EnumerateArray()
-            .Select(row => row.EnumerateArray().Select(value => value.ValueKind == JsonValueKind.Null ? double.NaN : value.GetDouble()).ToList())
-            .ToList();
-    }
-
     private static bool tryReadCoordinate(string value, out double coordinate)
     {
         return double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out coordinate);
@@ -1109,11 +1081,6 @@ public class RouteController : ControllerBase
         }
 
         return coordinate;
-    }
-
-    private static string formatCoordinate(double longitude, double latitude)
-    {
-        return $"{longitude.ToString(CultureInfo.InvariantCulture)},{latitude.ToString(CultureInfo.InvariantCulture)}";
     }
 
     private static GeoPoint getKnownCity(string city)
